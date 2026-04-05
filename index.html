@@ -980,9 +980,18 @@ async function socialLogin(provider) {
   const providerMap = { google: 'google', microsoft: 'azure', apple: 'apple' };
   const sbProvider  = providerMap[provider];
   showToast(`Conectando con ${provider.charAt(0).toUpperCase()+provider.slice(1)}...`);
+
+  const options = { redirectTo: 'https://sonata-ecru.vercel.app' };
+
+  // Para Google pedimos también acceso a Drive
+  if (provider === 'google') {
+    options.scopes = 'https://www.googleapis.com/auth/drive.readonly';
+    options.queryParams = { access_type: 'offline', prompt: 'consent' };
+  }
+
   const { error } = await _supabase.auth.signInWithOAuth({
     provider: sbProvider,
-    options: { redirectTo: 'https://sonata-ecru.vercel.app' }
+    options
   });
   if (error) showToast('Error: ' + error.message);
 }
@@ -1078,6 +1087,7 @@ async function initApp() {
   // Cargar datos reales desde Supabase
   await loadClouds();
   await loadPlaylists();
+  await loadSongsFromDB();
 
   buildLibrary();
   updateStats();
@@ -1104,7 +1114,10 @@ async function loadPlaylists() {
 
 function buildLibrary() {
   const ids = Object.keys(connectedClouds).filter(k=>connectedClouds[k]);
-  songs = ids.length === 0 ? [] : DEMO_SONGS.filter(s=>ids.includes(s.cloud));
+  // Si hay canciones reales de DB las usa, sino muestra demo
+  if (songs.length === 0) {
+    songs = ids.length === 0 ? [] : DEMO_SONGS.filter(s=>ids.includes(s.cloud));
+  }
 }
 
 function updateStats() {
@@ -1239,30 +1252,73 @@ function handleSearch(v) { renderAllSongs(v); showView('songs',null); }
 function filterSongs(v)   { renderAllSongs(v); }
 
 // ══ PLAYER ══
-function playSongById(id) {
+const audioEl = new Audio();
+audioEl.addEventListener('ended', () => nextSong());
+audioEl.addEventListener('timeupdate', () => {
+  if (!audioEl.duration) return;
+  progress = Math.floor(audioEl.currentTime);
+  songDuration = Math.floor(audioEl.duration);
+  updateProgressUI();
+});
+
+async function playSongById(id) {
   const idx = songs.findIndex(s=>s.id===id);
   if (idx===-1) return;
   currentSongIdx = idx;
   const song = songs[idx];
+
   document.getElementById('npTitle').textContent  = song.title;
   document.getElementById('npArtist').textContent = song.artist;
   document.getElementById('npArt').textContent    = song.emoji;
   document.getElementById('npArt').style.background = ALBUM_COLORS[song.id%6];
   document.getElementById('npHeart').textContent = song.liked?'♥':'♡';
   document.getElementById('npHeart').classList.toggle('liked', song.liked);
-  isPlaying = true; updatePlayBtn();
-  progress = 0; songDuration = parseDuration(song.duration);
-  startProgressTimer();
+
+  // Si tiene URL real de Drive, reproducir de verdad
+  if (song.fileUrl) {
+    const { data: { session } } = await _supabase.auth.getSession();
+    const token = session?.provider_token;
+    if (token) {
+      // Fetch con el token y crear blob URL para reproducir
+      try {
+        showToast(`⏳ Cargando ${song.title}...`);
+        const res = await fetch(song.fileUrl, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        const blob = await res.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        audioEl.src = blobUrl;
+        audioEl.play();
+        isPlaying = true;
+        updatePlayBtn();
+        showToast(`▶ ${song.title} — ${song.artist}`);
+      } catch(e) {
+        showToast('Error al reproducir: ' + e.message);
+      }
+    }
+  } else {
+    // Modo demo — simular reproducción
+    audioEl.src = '';
+    isPlaying = true; updatePlayBtn();
+    progress = 0; songDuration = parseDuration(song.duration);
+    startProgressTimer();
+    showToast(`▶ ${song.title} — ${song.artist}`);
+  }
+
   renderHomeSongs(); renderAllSongs();
-  showToast(`▶ ${song.title} — ${song.artist}`);
 }
 
 function parseDuration(d) { const [m,s]=d.split(':').map(Number); return m*60+s; }
 
 function togglePlay() {
   if (currentSongIdx===-1 && songs.length>0) { playSongById(songs[0].id); return; }
+  if (audioEl.src && audioEl.src !== window.location.href) {
+    if (isPlaying) { audioEl.pause(); } else { audioEl.play(); }
+  }
   isPlaying=!isPlaying;
-  if(isPlaying) startProgressTimer(); else stopProgressTimer();
+  if(!audioEl.src || audioEl.src === window.location.href) {
+    if(isPlaying) startProgressTimer(); else stopProgressTimer();
+  }
   updatePlayBtn();
 }
 function updatePlayBtn() {
@@ -1308,9 +1364,22 @@ function updateProgressUI() {
   document.getElementById('totalTime').textContent=formatTime(songDuration);
 }
 function formatTime(s) { const m=Math.floor(s/60); return `${m}:${(s%60).toString().padStart(2,'0')}`; }
-function seekTo(e) { progress=Math.floor((e.offsetX/e.currentTarget.offsetWidth)*songDuration); updateProgressUI(); }
-function setVolume(e) { volume=Math.max(0,Math.min(1,e.offsetX/e.currentTarget.offsetWidth)); document.getElementById('volFill').style.width=(volume*100)+'%'; }
-function toggleMute() { isMuted=!isMuted; document.getElementById('volFill').style.width=isMuted?'0%':(volume*100)+'%'; }
+function seekTo(e) {
+  const pct = e.offsetX/e.currentTarget.offsetWidth;
+  progress=Math.floor(pct*songDuration);
+  if (audioEl.duration) audioEl.currentTime = pct * audioEl.duration;
+  updateProgressUI();
+}
+function setVolume(e) {
+  volume=Math.max(0,Math.min(1,e.offsetX/e.currentTarget.offsetWidth));
+  audioEl.volume = volume;
+  document.getElementById('volFill').style.width=(volume*100)+'%';
+}
+function toggleMute() {
+  isMuted=!isMuted;
+  audioEl.muted = isMuted;
+  document.getElementById('volFill').style.width=isMuted?'0%':(volume*100)+'%';
+}
 
 // ══ CLOUDS ══
 function startConnect(id) {
@@ -1363,8 +1432,111 @@ async function disconnectCloud(id) {
 
 function syncCloud(id) {
   const c=CLOUD_SERVICES.find(x=>x.id===id);
-  showToast(`↻ Sincronizando ${c.name}...`);
-  setTimeout(()=>showToast(`✓ ${c.name} sincronizado`),2000);
+  if (id === 'gdrive') {
+    syncGoogleDrive();
+  } else {
+    showToast(`↻ Sincronizando ${c.name}...`);
+    setTimeout(()=>showToast(`✓ ${c.name} sincronizado`),2000);
+  }
+}
+
+// ══ GOOGLE DRIVE REAL ══
+async function syncGoogleDrive() {
+  showToast('↻ Escaneando Google Drive...');
+
+  // Obtener el token de acceso de la sesión actual
+  const { data: { session } } = await _supabase.auth.getSession();
+  const accessToken = session?.provider_token;
+
+  if (!accessToken) {
+    showToast('⚠ Reconecta tu cuenta de Google para dar acceso a Drive');
+    // Pedir reconexión con scope de Drive
+    await _supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: 'https://sonata-ecru.vercel.app',
+        scopes: 'https://www.googleapis.com/auth/drive.readonly',
+        queryParams: { access_type: 'offline', prompt: 'consent' }
+      }
+    });
+    return;
+  }
+
+  try {
+    // Buscar archivos de música en Google Drive
+    const tipos = "mimeType='audio/mpeg' or mimeType='audio/flac' or mimeType='audio/wav' or mimeType='audio/ogg' or mimeType='audio/x-m4a'";
+    const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(tipos)}&fields=files(id,name,size,mimeType)&pageSize=200`;
+
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+    const data = await res.json();
+
+    if (!data.files || data.files.length === 0) {
+      showToast('No se encontraron archivos de música en tu Drive');
+      return;
+    }
+
+    showToast(`✓ Encontradas ${data.files.length} canciones en Drive`);
+
+    // Guardar cada canción en Supabase
+    let guardadas = 0;
+    for (const file of data.files) {
+      const nombre = file.name.replace(/\.(mp3|flac|wav|ogg|m4a)$/i, '');
+      const partes  = nombre.split(' - ');
+      const artista = partes.length > 1 ? partes[0].trim() : 'Desconocido';
+      const titulo  = partes.length > 1 ? partes.slice(1).join(' - ').trim() : nombre;
+      const fileUrl = `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`;
+
+      const { error } = await _supabase.from('songs').upsert({
+        user_id:       currentUser.id,
+        title:         titulo,
+        artist:        artista,
+        album:         'Google Drive',
+        file_path:     file.id,
+        file_url:      fileUrl,
+        cloud_provider:'gdrive',
+        duration:      0
+      }, { onConflict: 'user_id,file_path' });
+
+      if (!error) guardadas++;
+    }
+
+    showToast(`✓ ${guardadas} canciones guardadas en tu biblioteca`);
+
+    // Recargar canciones desde Supabase
+    await loadSongsFromDB();
+    updateStats();
+    renderAll();
+
+  } catch (err) {
+    showToast('Error al leer Drive: ' + err.message);
+  }
+}
+
+// Cargar canciones reales desde Supabase
+async function loadSongsFromDB() {
+  const { data } = await _supabase
+    .from('songs')
+    .select('*')
+    .eq('user_id', currentUser.id)
+    .order('title', { ascending: true });
+
+  if (data && data.length > 0) {
+    // Convertir formato Supabase al formato de la app
+    songs = data.map((s, i) => ({
+      id:       i + 1,
+      dbId:     s.id,
+      title:    s.title || 'Sin título',
+      artist:   s.artist || 'Desconocido',
+      album:    s.album || 'Sin álbum',
+      duration: s.duration ? formatTime(s.duration) : '0:00',
+      emoji:    '🎵',
+      cloud:    s.cloud_provider || 'gdrive',
+      fileUrl:  s.file_url,
+      liked:    s.liked || false
+    }));
+  }
 }
 
 // ══ PLAYLISTS ══
