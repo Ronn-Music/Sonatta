@@ -982,7 +982,7 @@ async function socialLogin(provider) {
   showToast(`Conectando con ${provider.charAt(0).toUpperCase()+provider.slice(1)}...`);
   const { error } = await _supabase.auth.signInWithOAuth({
     provider: sbProvider,
-    options: { redirectTo: window.location.href }
+    options: { redirectTo: 'https://sonata-ecru.vercel.app' }
   });
   if (error) showToast('Error: ' + error.message);
 }
