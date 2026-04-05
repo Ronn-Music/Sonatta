@@ -873,19 +873,19 @@
 
       <div class="sidebar-section">
         <div class="sidebar-section-title">Mis Nubes</div>
-        <div class="cloud-item" onclick="showView('clouds',null)">
+        <div class="cloud-item" onclick="showView('clouds',null);renderClouds()">
           <div class="cloud-dot" id="gdot-gdrive"></div><span>Google Drive</span>
         </div>
-        <div class="cloud-item" onclick="showView('clouds',null)">
+        <div class="cloud-item" onclick="showView('clouds',null);renderClouds()">
           <div class="cloud-dot" id="gdot-onedrive"></div><span>OneDrive</span>
         </div>
-        <div class="cloud-item" onclick="showView('clouds',null)">
+        <div class="cloud-item" onclick="showView('clouds',null);renderClouds()">
           <div class="cloud-dot" id="gdot-dropbox"></div><span>Dropbox</span>
         </div>
-        <div class="cloud-item" onclick="showView('clouds',null)">
+        <div class="cloud-item" onclick="showView('clouds',null);renderClouds()">
           <div class="cloud-dot" id="gdot-box"></div><span>Box</span>
         </div>
-        <div class="cloud-item" onclick="showView('clouds',null)">
+        <div class="cloud-item" onclick="showView('clouds',null);renderClouds()">
           <div class="cloud-dot" id="gdot-s3"></div><span>Amazon S3</span>
         </div>
       </div>
@@ -991,7 +991,9 @@
         <div class="view-header">
           <div><div class="view-title">Servicios en la nube</div><div class="view-subtitle">Conecta tus nubes para acceder a tu música</div></div>
         </div>
-        <div class="clouds-grid" id="cloudsGrid"></div>
+        <div class="clouds-grid" id="cloudsGrid">
+          <!-- Las tarjetas se cargan aquí -->
+        </div>
       </div>
 
     </main>
@@ -1218,11 +1220,9 @@ async function logout() {
 
 // VERIFICAR SESIÓN ACTIVA al cargar
 async function checkSession() {
-  // Primero verificar si venimos de un callback de nube (Google Drive OAuth)
-  const hash = window.location.hash;
-  const params = new URLSearchParams(hash.replace('#', ''));
-  const accessToken = params.get('access_token');
-  const connectingCloud = sessionStorage.getItem('connecting_cloud');
+  // Si hay hash de OAuth en la URL, procesarlo ANTES que nada
+  // (Esto ocurre si el popup no pudo abrirse y Google redirigió aquí directamente)
+  const hasOAuthHash = window.location.hash.includes('access_token');
 
   _supabase.auth.onAuthStateChange((event, session) => {
     if (event === 'SIGNED_IN' && session?.user) {
@@ -1234,10 +1234,14 @@ async function checkSession() {
 
   if (session?.user) {
     loginSuccess(session.user);
-    // Después del login, detectar si hay callback de Drive
-    if (accessToken && connectingCloud) {
-      setTimeout(() => detectCloudCallback(), 500);
+    // Detectar callback de Drive DESPUÉS de que la app cargue
+    if (hasOAuthHash) {
+      setTimeout(() => detectCloudCallback(), 600);
     }
+  } else if (hasOAuthHash) {
+    // Si no hay sesión pero hay token OAuth, puede que el popup lo reciba
+    // Intentar igualmente (si estamos en el popup, se cerrará solo)
+    setTimeout(() => detectCloudCallback(), 200);
   }
 }
 
@@ -1274,9 +1278,45 @@ async function loadClouds() {
   connectedClouds = {};
   const { data } = await _supabase
     .from('cloud_connections')
-    .select('provider')
+    .select('provider, account_key, account_label, token_expires_at')
     .eq('user_id', currentUser.id);
-  if (data) data.forEach(r => connectedClouds[r.provider] = true);
+
+  if (data) {
+    data.forEach(r => {
+      const key = r.account_key || r.provider;
+      const expired = r.token_expires_at && new Date(r.token_expires_at) < new Date();
+      connectedClouds[key] = !expired;
+      if (!expired) connectedClouds[r.provider] = true; // flag genérico
+    });
+    // Guardar lista completa para renderClouds
+    connectedClouds._accounts = data;
+  }
+}
+
+async function loadSongsFromDB() {
+  const { data } = await _supabase
+    .from('songs')
+    .select('*')
+    .eq('user_id', currentUser.id)
+    .order('title', { ascending: true });
+
+  if (data && data.length > 0) {
+    songs = data.map(function(s) {
+      return {
+        id:       s.id,
+        title:    s.title    || 'Sin título',
+        artist:   s.artist   || 'Desconocido',
+        album:    s.album    || 'Sin álbum',
+        duration: s.duration ? formatTime(s.duration) : '0:00',
+        emoji:    s.emoji    || '🎵',
+        cloud:    s.cloud_provider || 'gdrive',
+        fileUrl:  s.file_url || null,
+        filePath: s.file_path || null,
+        accountKey: s.account_key || null,
+        liked:    false
+      };
+    });
+  }
 }
 
 async function loadPlaylists() {
@@ -1378,28 +1418,66 @@ function renderArtists() {
 }
 function renderClouds() {
   const el = document.getElementById('cloudsGrid');
-  el.innerHTML = CLOUD_SERVICES.map(c=>{
-    const conn = !!connectedClouds[c.id];
-    const cnt  = songs.filter(s=>s.cloud===c.id).length;
-    return `
-    <div class="cloud-card">
-      <div class="cloud-card-header">
-        <div class="cloud-icon" style="background:${c.color}22">${c.icon}</div>
-        <div>
-          <div class="cloud-card-name">${c.name}</div>
-          <div class="cloud-card-status ${conn?'status-connected':'status-disconnected'}">${conn?'● Conectado':'○ No conectado'}</div>
-        </div>
-      </div>
-      <div class="cloud-stats">
-        <div class="cloud-stat-item"><strong>${conn?cnt:'—'}</strong>canciones</div>
-        <div class="cloud-stat-item"><strong>${c.desc}</strong></div>
-      </div>
-      ${conn
-        ? `<button class="btn-sync" onclick="syncCloud('${c.id}')">↻ Sincronizar</button>
-           <button class="btn-disconnect" onclick="disconnectCloud('${c.id}')">Desconectar</button>`
-        : `<button class="btn-connect" onclick="startConnect('${c.id}')">Conectar con ${c.name}</button>`}
-    </div>`;
-  }).join('');
+  if (!el) return;
+
+  const accounts = connectedClouds._accounts || [];
+  let html = '';
+
+  CLOUD_SERVICES.forEach(function(c) {
+    // Cuentas conectadas para este proveedor
+    const providerAccounts = accounts.filter(function(a) { return a.provider === c.id; });
+    const hasAny = providerAccounts.length > 0;
+
+    if (hasAny) {
+      // Tarjeta por cada cuenta conectada
+      providerAccounts.forEach(function(acc) {
+        const expired = acc.token_expires_at && new Date(acc.token_expires_at) < new Date();
+        const label   = acc.account_label || acc.account_key || c.name;
+        const key     = acc.account_key || c.id;
+        const cnt     = songs.filter(function(s){ return s.cloud === c.id; }).length;
+
+        html += '<div class="cloud-card">'
+          + '<div class="cloud-card-header">'
+          + '<div class="cloud-icon" style="background:' + c.color + '22;font-size:1.4rem;width:46px;height:46px;display:flex;align-items:center;justify-content:center;border-radius:12px">' + c.icon + '</div>'
+          + '<div style="flex:1;min-width:0">'
+          + '<div class="cloud-card-name">' + c.name + '</div>'
+          + '<div class="cloud-card-status ' + (expired ? 'status-disconnected' : 'status-connected') + '" style="font-size:0.7rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="' + label + '">'
+          + (expired ? '⚠ Token expirado' : '● ' + label) + '</div>'
+          + '</div></div>'
+          + '<div class="cloud-stats">'
+          + '<div class="cloud-stat-item"><strong>' + cnt + '</strong>canciones</div>'
+          + '<div class="cloud-stat-item" style="font-size:0.75rem">' + c.desc + '</div>'
+          + '</div>'
+          + (expired
+            ? '<button class="btn-connect" onclick="startConnect(\'' + c.id + '\')">Reconectar cuenta</button>'
+            : '<button class="btn-sync" onclick="syncCloud(\'' + c.id + '\',\'' + key + '\')">↻ Sincronizar</button>'
+              + '<button class="btn-disconnect" style="margin-top:7px" onclick="disconnectCloud(\'' + c.id + '\',\'' + key + '\')">Desconectar esta cuenta</button>')
+          + '</div>';
+      });
+
+      // Botón para agregar otra cuenta del mismo proveedor
+      if (c.id === 'gdrive') {
+        html += '<div class="cloud-card" style="border-style:dashed;display:flex;align-items:center;justify-content:center;gap:10px;cursor:pointer;min-height:80px;color:var(--accent2)" onclick="startConnect(\'' + c.id + '\')">'
+          + '<span style="font-size:1.3rem">+</span><span style="font-size:0.83rem;font-weight:600">Agregar otra cuenta de ' + c.name + '</span></div>';
+      }
+    } else {
+      // No hay cuentas — tarjeta de conexión
+      html += '<div class="cloud-card">'
+        + '<div class="cloud-card-header">'
+        + '<div class="cloud-icon" style="background:' + c.color + '22;font-size:1.4rem;width:46px;height:46px;display:flex;align-items:center;justify-content:center;border-radius:12px">' + c.icon + '</div>'
+        + '<div><div class="cloud-card-name">' + c.name + '</div>'
+        + '<div class="cloud-card-status status-disconnected">○ No conectado</div></div>'
+        + '</div>'
+        + '<div class="cloud-stats">'
+        + '<div class="cloud-stat-item"><strong>—</strong>canciones</div>'
+        + '<div class="cloud-stat-item" style="font-size:0.75rem">' + c.desc + '</div>'
+        + '</div>'
+        + '<button class="btn-connect" onclick="startConnect(\'' + c.id + '\')">Conectar con ' + c.name + '</button>'
+        + '</div>';
+    }
+  });
+
+  el.innerHTML = html;
 }
 function renderPlaylists() {
   const el = document.getElementById('playlistsGrid');
@@ -1418,9 +1496,12 @@ function renderPlaylists() {
 // ══ NAVIGATION ══
 function showView(name, navEl) {
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
-  document.getElementById('view-'+name)?.classList.add('active');
+  const view = document.getElementById('view-'+name);
+  if (view) view.classList.add('active');
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   if (navEl?.classList?.contains('nav-item')) navEl.classList.add('active');
+  // Re-render clouds every time we open that view
+  if (name === 'clouds') renderClouds();
 }
 
 // ══ SEARCH ══
@@ -1564,21 +1645,25 @@ function toggleMute() {
 }
 
 // ══ CLOUDS ══
-// Cada nube tiene su propio flujo OAuth independiente del login
-// Los tokens se guardan en Supabase para cada usuario
+// OAuth via POPUP — nunca redirige la página principal
+// Soporta múltiples cuentas del mismo proveedor (account_key único)
 
 const GOOGLE_CLIENT_ID = '980361737078-vk91pdvckri8pemueg44tlmebbu1shfo.apps.googleusercontent.com';
-const GOOGLE_REDIRECT   = 'https://sonata-ecru.vercel.app/gdrive-callback.html';
+// La redirect_uri debe coincidir EXACTAMENTE con lo registrado en Google Cloud Console
+// Para desarrollo local: http://localhost:PORT  |  Para producción: https://sonata-ecru.vercel.app
+const GOOGLE_REDIRECT = window.location.origin + window.location.pathname.replace(/\/[^/]*$/, '') + '/gdrive-callback.html';
 
-// Iniciar conexión OAuth con Google Drive (independiente del login)
+let _oauthPopup = null;
+let _oauthInterval = null;
+
+// Iniciar conexión con cualquier nube
 function startConnect(id) {
   pendingCloud = id;
   const c = CLOUD_SERVICES.find(x => x.id === id);
 
   if (id === 'gdrive') {
-    connectGoogleDrive();
+    connectGoogleDrivePopup();
   } else {
-    // Para otras nubes mostrar modal informativo
     document.getElementById('oauthIcon').textContent = c.icon;
     document.getElementById('oauthTitle').textContent = `Conectar ${c.name}`;
     document.getElementById('oauthDesc').textContent = `Sonata se conectará a tu ${c.name} para leer archivos de música. Próximamente disponible.`;
@@ -1586,47 +1671,144 @@ function startConnect(id) {
   }
 }
 
-// OAuth de Google Drive — abre ventana popup independiente
-function connectGoogleDrive() {
-  const scope = encodeURIComponent('https://www.googleapis.com/auth/drive.readonly');
-  const redirectUri = encodeURIComponent('https://sonata-ecru.vercel.app');
-  const clientId = encodeURIComponent(GOOGLE_CLIENT_ID);
-  const state = encodeURIComponent(JSON.stringify({ provider: 'gdrive', userId: currentUser.id }));
+// ─── GOOGLE DRIVE OAUTH VÍA POPUP ──────────────────────────────────────────
+function connectGoogleDrivePopup() {
+  // Genera un nonce único para este intento de conexión
+  const nonce = Math.random().toString(36).slice(2);
+  sessionStorage.setItem('gdrive_oauth_nonce', nonce);
 
-  const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
-    `client_id=${clientId}` +
-    `&redirect_uri=${redirectUri}` +
-    `&response_type=token` +
-    `&scope=${scope}` +
-    `&state=${state}` +
-    `&prompt=select_account`;
+  const scope       = 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/userinfo.email';
+  const redirectUri = window.location.origin + window.location.pathname; // misma página
+  const authUrl     = 'https://accounts.google.com/o/oauth2/v2/auth'
+    + '?client_id='     + encodeURIComponent(GOOGLE_CLIENT_ID)
+    + '&redirect_uri='  + encodeURIComponent(redirectUri)
+    + '&response_type=token'
+    + '&scope='         + encodeURIComponent(scope)
+    + '&state='         + encodeURIComponent(JSON.stringify({ nonce, provider: 'gdrive' }))
+    + '&prompt=select_account';   // fuerza elegir cuenta → permite varias cuentas
 
-  // Guardar estado para cuando regrese el token
-  sessionStorage.setItem('connecting_cloud', 'gdrive');
+  // Abrir popup centrado
+  const w = 520, h = 620;
+  const left = Math.round(screen.width  / 2 - w / 2);
+  const top  = Math.round(screen.height / 2 - h / 2);
+  _oauthPopup = window.open(authUrl, 'SonataOAuth',
+    `width=${w},height=${h},left=${left},top=${top},toolbar=no,menubar=no,scrollbars=yes`);
 
-  // Abrir en la misma ventana — cuando regrese detectamos el token en la URL
-  window.location.href = authUrl;
+  if (!_oauthPopup) {
+    showToast('⚠ El navegador bloqueó el popup. Permite popups para este sitio e intenta de nuevo.');
+    return;
+  }
+
+  showToast('🔐 Abre la ventana de Google para autorizar...');
+
+  // Escuchar el token via postMessage (el popup nos lo manda)
+  window.addEventListener('message', _handleOauthMessage, { once: false });
+
+  // Fallback: sondear si el popup cerró sin respuesta
+  _oauthInterval = setInterval(() => {
+    if (_oauthPopup && _oauthPopup.closed) {
+      clearInterval(_oauthInterval);
+      window.removeEventListener('message', _handleOauthMessage);
+      showToast('ℹ Ventana cerrada sin conectar');
+    }
+  }, 800);
 }
 
-// Detectar token de Google Drive en la URL al cargar la página
+// Handler del postMessage que manda el popup (o la propia página si no hay popup page)
+async function _handleOauthMessage(ev) {
+  if (ev.origin !== window.location.origin) return;
+  const msg = ev.data;
+  if (!msg || msg.type !== 'gdrive_token') return;
+
+  // Limpiar listener y polling
+  window.removeEventListener('message', _handleOauthMessage);
+  clearInterval(_oauthInterval);
+  if (_oauthPopup && !_oauthPopup.closed) _oauthPopup.close();
+
+  // Validar nonce
+  const savedNonce = sessionStorage.getItem('gdrive_oauth_nonce');
+  sessionStorage.removeItem('gdrive_oauth_nonce');
+  if (msg.nonce !== savedNonce) { showToast('⚠ Error de seguridad: nonce inválido'); return; }
+
+  await _saveGdriveToken(msg.token, msg.expiresIn, msg.accountEmail);
+}
+
+// Detectar si la página actual es el redirect del OAuth (hash con access_token)
+// Esto ocurre cuando Google redirige a la MISMA URL (sin popup page separada)
 async function detectCloudCallback() {
   const hash = window.location.hash;
-  const params = new URLSearchParams(hash.replace('#', ''));
-  const accessToken = params.get('access_token');
-  const connectingCloud = sessionStorage.getItem('connecting_cloud');
+  if (!hash.includes('access_token')) return false;
 
-  if (accessToken && connectingCloud === 'gdrive') {
-    sessionStorage.removeItem('connecting_cloud');
+  const params       = new URLSearchParams(hash.replace('#', ''));
+  const accessToken  = params.get('access_token');
+  const expiresIn    = parseInt(params.get('expires_in') || '3600');
+  const stateRaw     = params.get('state');
 
-    // Limpiar la URL
-    window.history.replaceState({}, document.title, window.location.pathname);
+  // Limpiar el hash de la URL inmediatamente
+  window.history.replaceState({}, document.title, window.location.pathname);
 
-    showToast('✓ Google Drive conectado — escaneando canciones...');
+  if (!accessToken) return false;
 
-    // Guardar token en Supabase
-    const expiresIn = parseInt(params.get('expires_in') || '3600');
-    const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
+  let state = {};
+  try { state = JSON.parse(decodeURIComponent(stateRaw || '{}')); } catch {}
 
+  if (state.provider !== 'gdrive') return false;
+
+  // Si esto se ejecuta en el popup, mandar mensaje al padre y cerrar
+  if (window.opener && !window.opener.closed) {
+    window.opener.postMessage({
+      type:         'gdrive_token',
+      token:        accessToken,
+      expiresIn,
+      nonce:        state.nonce,
+      accountEmail: null   // se obtiene con el token
+    }, window.location.origin);
+    window.close();
+    return true;
+  }
+
+  // Si no hay popup (flujo redirect en ventana principal), guardar directamente
+  // Esto puede pasar si el usuario abrió la URL directamente
+  const nonce = sessionStorage.getItem('gdrive_oauth_nonce');
+  if (state.nonce && state.nonce !== nonce) {
+    showToast('⚠ Sesión OAuth expirada. Intenta de nuevo.');
+    return false;
+  }
+  sessionStorage.removeItem('gdrive_oauth_nonce');
+  await _saveGdriveToken(accessToken, expiresIn, null);
+  return true;
+}
+
+// Guardar token en Supabase y escanear (soporta múltiples cuentas)
+async function _saveGdriveToken(accessToken, expiresIn, emailHint) {
+  showToast('⏳ Conectando Google Drive...');
+
+  // Obtener email de la cuenta para usarlo como account_key único
+  let accountEmail = emailHint;
+  if (!accountEmail) {
+    try {
+      const r = await fetch('https://www.googleapis.com/oauth2/v2/userinfo',
+        { headers: { Authorization: 'Bearer ' + accessToken } });
+      const info = await r.json();
+      accountEmail = info.email || ('cuenta_' + Date.now());
+    } catch { accountEmail = 'cuenta_' + Date.now(); }
+  }
+
+  const expiresAt  = new Date(Date.now() + expiresIn * 1000).toISOString();
+  const accountKey = 'gdrive:' + accountEmail;   // clave única por cuenta
+
+  const { error } = await _supabase.from('cloud_connections').upsert({
+    user_id:          currentUser.id,
+    provider:         'gdrive',
+    account_key:      accountKey,
+    account_label:    accountEmail,
+    access_token:     accessToken,
+    token_expires_at: expiresAt,
+    connected_at:     new Date().toISOString()
+  }, { onConflict: 'user_id,account_key' });
+
+  if (error) {
+    // Columna account_key puede no existir aún — fallback a user_id+provider
     await _supabase.from('cloud_connections').upsert({
       user_id:          currentUser.id,
       provider:         'gdrive',
@@ -1634,40 +1816,44 @@ async function detectCloudCallback() {
       token_expires_at: expiresAt,
       connected_at:     new Date().toISOString()
     }, { onConflict: 'user_id,provider' });
-
-    connectedClouds['gdrive'] = true;
-
-    // Escanear canciones inmediatamente
-    await scanGoogleDrive(accessToken);
-
-    updateStats();
-    renderAll();
-    return true;
   }
-  return false;
+
+  // Marcar como conectado en memoria (con la cuenta específica)
+  connectedClouds[accountKey] = { token: accessToken, email: accountEmail };
+  connectedClouds['gdrive']   = true;  // para compatibilidad con resto del código
+
+  showToast('✓ ' + accountEmail + ' conectada — escaneando...');
+
+  await scanGoogleDrive(accessToken, accountKey);
+  await loadClouds();
+  updateStats();
+  renderAll();
 }
 
 // Escanear Google Drive y guardar canciones en Supabase
-async function scanGoogleDrive(token) {
-  showToast('⏳ Escaneando Google Drive...');
+async function scanGoogleDrive(token, accountKey) {
+  const label = accountKey ? accountKey.replace('gdrive:', '') : 'Google Drive';
+  showToast('⏳ Escaneando ' + label + '...');
   try {
     const tipos = "(mimeType='audio/mpeg' or mimeType='audio/flac' or mimeType='audio/wav' or mimeType='audio/ogg' or mimeType='audio/x-m4a' or mimeType='audio/mp4')";
-    const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(tipos)}&fields=files(id,name,size,mimeType)&pageSize=500`;
+    const url = 'https://www.googleapis.com/drive/v3/files?q=' + encodeURIComponent(tipos)
+      + '&fields=files(id,name,size,mimeType)&pageSize=500';
 
-    const res = await fetch(url, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
+    const res  = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
     const data = await res.json();
 
+    if (data.error) {
+      showToast('⚠ Error de Google Drive: ' + (data.error.message || 'token inválido'));
+      return;
+    }
     if (!data.files || data.files.length === 0) {
-      showToast('⚠ No se encontraron archivos de música en Google Drive');
+      showToast('⚠ No se encontraron archivos de música en ' + label);
       return;
     }
 
-    // Parsear metadatos del nombre del archivo
     let guardadas = 0;
     for (const file of data.files) {
-      const nombre = file.name.replace(/\.(mp3|flac|wav|ogg|m4a|mp4)$/i, '');
+      const nombre  = file.name.replace(/\.(mp3|flac|wav|ogg|m4a|mp4)$/i, '');
       const partes  = nombre.split(' - ');
       const artista = partes.length > 1 ? partes[0].trim() : 'Desconocido';
       const titulo  = partes.length > 1 ? partes.slice(1).join(' - ').trim() : nombre;
@@ -1677,16 +1863,17 @@ async function scanGoogleDrive(token) {
         title:          titulo,
         artist:         artista,
         album:          'Google Drive',
-        file_path:      file.id,
-        file_url:       `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`,
+        file_path:      (accountKey || 'gdrive') + ':' + file.id,
+        file_url:       'https://www.googleapis.com/drive/v3/files/' + file.id + '?alt=media',
         cloud_provider: 'gdrive',
+        account_key:    accountKey || 'gdrive',
         duration:       0
       }, { onConflict: 'user_id,file_path' });
 
       if (!error) guardadas++;
     }
 
-    showToast(`✓ ${guardadas} canciones encontradas en Google Drive`);
+    showToast('✓ ' + guardadas + ' canciones de ' + label);
     await loadSongsFromDB();
 
   } catch(err) {
@@ -1695,59 +1882,66 @@ async function scanGoogleDrive(token) {
 }
 
 // Sincronizar nube — pide token guardado y re-escanea
-async function syncCloud(id) {
+async function syncCloud(id, accountKey) {
   if (id === 'gdrive') {
-    const { data } = await _supabase
+    const query = _supabase
       .from('cloud_connections')
-      .select('access_token, token_expires_at')
+      .select('access_token, token_expires_at, account_key, account_label')
       .eq('user_id', currentUser.id)
-      .eq('provider', 'gdrive')
-      .single();
+      .eq('provider', 'gdrive');
 
-    if (!data?.access_token) {
-      showToast('⚠ Reconecta Google Drive');
-      return;
+    if (accountKey) query.eq('account_key', accountKey);
+
+    const { data } = await query;
+    const rows = data || [];
+
+    if (rows.length === 0) { showToast('⚠ Reconecta Google Drive'); return; }
+
+    for (const row of rows) {
+      const expired = row.token_expires_at && new Date(row.token_expires_at) < new Date();
+      if (expired) {
+        showToast('⚠ Token expirado para ' + (row.account_label || 'cuenta') + ' — reconecta');
+        connectedClouds[row.account_key || 'gdrive'] = false;
+        renderClouds();
+        continue;
+      }
+      await scanGoogleDrive(row.access_token, row.account_key);
     }
-
-    // Verificar si el token expiró
-    const expired = data.token_expires_at && new Date(data.token_expires_at) < new Date();
-    if (expired) {
-      showToast('⚠ El token expiró — reconecta Google Drive');
-      connectedClouds['gdrive'] = false;
-      renderClouds();
-      return;
-    }
-
-    await scanGoogleDrive(data.access_token);
+    await loadClouds();
     updateStats();
     renderAll();
   } else {
-    showToast(`↻ Sincronizando...`);
+    showToast('↻ Sincronizando...');
     setTimeout(() => showToast('✓ Sincronizado'), 2000);
   }
 }
 
-async function disconnectCloud(id) {
+async function disconnectCloud(id, accountKey) {
   const c = CLOUD_SERVICES.find(x => x.id === id);
-  if (!confirm(`¿Desconectar ${c.name}?`)) return;
+  const label = accountKey ? accountKey.replace(id + ':', '') : c.name;
+  if (!confirm('¿Desconectar ' + label + '?')) return;
 
-  await _supabase.from('cloud_connections')
+  const q = _supabase.from('cloud_connections')
     .delete()
     .eq('user_id', currentUser.id)
     .eq('provider', id);
+  if (accountKey) q.eq('account_key', accountKey);
+  await q;
 
-  // Eliminar canciones de esa nube
-  await _supabase.from('songs')
+  // Eliminar canciones de esa cuenta específica (o todas las del proveedor)
+  const sq = _supabase.from('songs')
     .delete()
     .eq('user_id', currentUser.id)
     .eq('cloud_provider', id);
+  if (accountKey) sq.eq('account_key', accountKey);
+  await sq;
 
-  delete connectedClouds[id];
+  await loadClouds();
   await loadSongsFromDB();
   buildLibrary();
   updateStats();
   renderAll();
-  showToast(`${c.name} desconectado`);
+  showToast(label + ' desconectado');
 }
 
 function closeModal() {
