@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Sonata — Tu música en las nubes</title>
-<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,300&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&family=Syne:wght@400;600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,300&display=swap" rel="stylesheet">
 <style>
   :root {
     --bg: #0a0a0f;
@@ -92,18 +92,20 @@
     box-shadow: 0 0 0 4px rgba(167,139,250,0.25), 0 10px 40px rgba(124,92,252,0.4);
   }
   .welcome-app-name {
-    font-family: 'Syne', sans-serif;
-    font-size: 2.6rem;
-    font-weight: 800;
-    color: white;
-    letter-spacing: -1px;
+    font-family: 'Nunito', sans-serif;
+    font-size: 2.8rem;
+    font-weight: 900;
+    color: #ee9c36;
+    letter-spacing: -0.5px;
     margin-bottom: 10px;
   }
   .welcome-tagline {
+    font-family: 'DM Sans', sans-serif;
     color: rgba(255,255,255,0.45);
-    font-size: 0.85rem;
-    letter-spacing: 2px;
+    font-size: 0.82rem;
+    letter-spacing: 3px;
     text-transform: uppercase;
+    font-style: italic;
   }
   .welcome-actions {
     display: flex;
@@ -182,10 +184,10 @@
     box-shadow: 0 0 0 3px rgba(167,139,250,0.25), 0 6px 20px rgba(124,92,252,0.35);
   }
   .auth-screen-logo span {
-    font-family: 'Syne', sans-serif;
-    font-size: 1.5rem;
-    font-weight: 800;
-    color: white;
+    font-family: 'Nunito', sans-serif;
+    font-size: 1.6rem;
+    font-weight: 900;
+    color: #ee9c36;
     letter-spacing: -0.5px;
   }
   .auth-card {
@@ -391,13 +393,11 @@
     object-fit: cover;
   }
   .sidebar-logo-name {
-    font-family: 'Syne', sans-serif;
-    font-size: 1.15rem;
-    font-weight: 800;
-    background: linear-gradient(135deg, #a78bfa, #38bdf8);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    letter-spacing: -0.5px;
+    font-family: 'Nunito', sans-serif;
+    font-size: 1.2rem;
+    font-weight: 900;
+    color: #ee9c36;
+    letter-spacing: -0.3px;
   }
 
   .sidebar-section { padding: 14px 0; border-bottom: 1px solid var(--border); }
@@ -1218,13 +1218,27 @@ async function logout() {
 
 // VERIFICAR SESIÓN ACTIVA al cargar
 async function checkSession() {
+  // Primero verificar si venimos de un callback de nube (Google Drive OAuth)
+  const hash = window.location.hash;
+  const params = new URLSearchParams(hash.replace('#', ''));
+  const accessToken = params.get('access_token');
+  const connectingCloud = sessionStorage.getItem('connecting_cloud');
+
   _supabase.auth.onAuthStateChange((event, session) => {
     if (event === 'SIGNED_IN' && session?.user) {
       loginSuccess(session.user);
     }
   });
+
   const { data: { session } } = await _supabase.auth.getSession();
-  if (session?.user) loginSuccess(session.user);
+
+  if (session?.user) {
+    loginSuccess(session.user);
+    // Después del login, detectar si hay callback de Drive
+    if (accessToken && connectingCloud) {
+      setTimeout(() => detectCloudCallback(), 500);
+    }
+  }
 }
 
 // ══ APP INIT ══
@@ -1366,7 +1380,7 @@ function renderClouds() {
   const el = document.getElementById('cloudsGrid');
   el.innerHTML = CLOUD_SERVICES.map(c=>{
     const conn = !!connectedClouds[c.id];
-    const cnt  = DEMO_SONGS.filter(s=>s.cloud===c.id).length;
+    const cnt  = songs.filter(s=>s.cloud===c.id).length;
     return `
     <div class="cloud-card">
       <div class="cloud-card-header">
@@ -1438,8 +1452,14 @@ async function playSongById(id) {
 
   // Si tiene URL real de Drive, reproducir de verdad
   if (song.fileUrl) {
-    const { data: { session } } = await _supabase.auth.getSession();
-    const token = session?.provider_token;
+    // Obtener token de Drive guardado en Supabase (independiente del login)
+    const { data: connData } = await _supabase
+      .from('cloud_connections')
+      .select('access_token')
+      .eq('user_id', currentUser.id)
+      .eq('provider', song.cloud || 'gdrive')
+      .single();
+    const token = connData?.access_token;
     if (token) {
       // Fetch con el token y crear blob URL para reproducir
       try {
@@ -1544,162 +1564,197 @@ function toggleMute() {
 }
 
 // ══ CLOUDS ══
+// Cada nube tiene su propio flujo OAuth independiente del login
+// Los tokens se guardan en Supabase para cada usuario
+
+const GOOGLE_CLIENT_ID = '980361737078-vk91pdvckri8pemueg44tlmebbu1shfo.apps.googleusercontent.com';
+const GOOGLE_REDIRECT   = 'https://sonata-ecru.vercel.app/gdrive-callback.html';
+
+// Iniciar conexión OAuth con Google Drive (independiente del login)
 function startConnect(id) {
-  pendingCloud=id;
-  const c=CLOUD_SERVICES.find(x=>x.id===id);
-  document.getElementById('oauthIcon').textContent=c.icon;
-  document.getElementById('oauthTitle').textContent=`Conectar ${c.name}`;
-  document.getElementById('oauthDesc').textContent=`Sonata se conectará a tu ${c.name} para leer archivos de música. Nunca accederemos a otros archivos.`;
-  document.getElementById('oauthModal').classList.add('show');
-}
-function closeModal() { document.getElementById('oauthModal').classList.remove('show'); pendingCloud=null; }
+  pendingCloud = id;
+  const c = CLOUD_SERVICES.find(x => x.id === id);
 
-async function confirmConnect() {
-  if(!pendingCloud) return;
-  const c=CLOUD_SERVICES.find(x=>x.id===pendingCloud);
-  const btn=document.getElementById('oauthConfirm');
-  btn.textContent='Conectando...';
-
-  // Guardar conexión en Supabase
-  const { error } = await _supabase.from('cloud_connections').upsert({
-    user_id:      currentUser.id,
-    provider:     pendingCloud,
-    connected_at: new Date().toISOString()
-  }, { onConflict: 'user_id,provider' });
-
-  if (error) {
-    showToast('Error al conectar: ' + error.message);
+  if (id === 'gdrive') {
+    connectGoogleDrive();
   } else {
-    connectedClouds[pendingCloud]=true;
-    buildLibrary(); updateStats(); renderAll();
-    showToast(`✓ ${c.name} conectado correctamente`);
+    // Para otras nubes mostrar modal informativo
+    document.getElementById('oauthIcon').textContent = c.icon;
+    document.getElementById('oauthTitle').textContent = `Conectar ${c.name}`;
+    document.getElementById('oauthDesc').textContent = `Sonata se conectará a tu ${c.name} para leer archivos de música. Próximamente disponible.`;
+    document.getElementById('oauthModal').classList.add('show');
   }
-  closeModal();
-  btn.textContent='Conectar con OAuth →';
+}
+
+// OAuth de Google Drive — abre ventana popup independiente
+function connectGoogleDrive() {
+  const scope = encodeURIComponent('https://www.googleapis.com/auth/drive.readonly');
+  const redirectUri = encodeURIComponent('https://sonata-ecru.vercel.app');
+  const clientId = encodeURIComponent(GOOGLE_CLIENT_ID);
+  const state = encodeURIComponent(JSON.stringify({ provider: 'gdrive', userId: currentUser.id }));
+
+  const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
+    `client_id=${clientId}` +
+    `&redirect_uri=${redirectUri}` +
+    `&response_type=token` +
+    `&scope=${scope}` +
+    `&state=${state}` +
+    `&prompt=select_account`;
+
+  // Guardar estado para cuando regrese el token
+  sessionStorage.setItem('connecting_cloud', 'gdrive');
+
+  // Abrir en la misma ventana — cuando regrese detectamos el token en la URL
+  window.location.href = authUrl;
+}
+
+// Detectar token de Google Drive en la URL al cargar la página
+async function detectCloudCallback() {
+  const hash = window.location.hash;
+  const params = new URLSearchParams(hash.replace('#', ''));
+  const accessToken = params.get('access_token');
+  const connectingCloud = sessionStorage.getItem('connecting_cloud');
+
+  if (accessToken && connectingCloud === 'gdrive') {
+    sessionStorage.removeItem('connecting_cloud');
+
+    // Limpiar la URL
+    window.history.replaceState({}, document.title, window.location.pathname);
+
+    showToast('✓ Google Drive conectado — escaneando canciones...');
+
+    // Guardar token en Supabase
+    const expiresIn = parseInt(params.get('expires_in') || '3600');
+    const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
+
+    await _supabase.from('cloud_connections').upsert({
+      user_id:          currentUser.id,
+      provider:         'gdrive',
+      access_token:     accessToken,
+      token_expires_at: expiresAt,
+      connected_at:     new Date().toISOString()
+    }, { onConflict: 'user_id,provider' });
+
+    connectedClouds['gdrive'] = true;
+
+    // Escanear canciones inmediatamente
+    await scanGoogleDrive(accessToken);
+
+    updateStats();
+    renderAll();
+    return true;
+  }
+  return false;
+}
+
+// Escanear Google Drive y guardar canciones en Supabase
+async function scanGoogleDrive(token) {
+  showToast('⏳ Escaneando Google Drive...');
+  try {
+    const tipos = "(mimeType='audio/mpeg' or mimeType='audio/flac' or mimeType='audio/wav' or mimeType='audio/ogg' or mimeType='audio/x-m4a' or mimeType='audio/mp4')";
+    const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(tipos)}&fields=files(id,name,size,mimeType)&pageSize=500`;
+
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    const data = await res.json();
+
+    if (!data.files || data.files.length === 0) {
+      showToast('⚠ No se encontraron archivos de música en Google Drive');
+      return;
+    }
+
+    // Parsear metadatos del nombre del archivo
+    let guardadas = 0;
+    for (const file of data.files) {
+      const nombre = file.name.replace(/\.(mp3|flac|wav|ogg|m4a|mp4)$/i, '');
+      const partes  = nombre.split(' - ');
+      const artista = partes.length > 1 ? partes[0].trim() : 'Desconocido';
+      const titulo  = partes.length > 1 ? partes.slice(1).join(' - ').trim() : nombre;
+
+      const { error } = await _supabase.from('songs').upsert({
+        user_id:        currentUser.id,
+        title:          titulo,
+        artist:         artista,
+        album:          'Google Drive',
+        file_path:      file.id,
+        file_url:       `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`,
+        cloud_provider: 'gdrive',
+        duration:       0
+      }, { onConflict: 'user_id,file_path' });
+
+      if (!error) guardadas++;
+    }
+
+    showToast(`✓ ${guardadas} canciones encontradas en Google Drive`);
+    await loadSongsFromDB();
+
+  } catch(err) {
+    showToast('Error al escanear Drive: ' + err.message);
+  }
+}
+
+// Sincronizar nube — pide token guardado y re-escanea
+async function syncCloud(id) {
+  if (id === 'gdrive') {
+    const { data } = await _supabase
+      .from('cloud_connections')
+      .select('access_token, token_expires_at')
+      .eq('user_id', currentUser.id)
+      .eq('provider', 'gdrive')
+      .single();
+
+    if (!data?.access_token) {
+      showToast('⚠ Reconecta Google Drive');
+      return;
+    }
+
+    // Verificar si el token expiró
+    const expired = data.token_expires_at && new Date(data.token_expires_at) < new Date();
+    if (expired) {
+      showToast('⚠ El token expiró — reconecta Google Drive');
+      connectedClouds['gdrive'] = false;
+      renderClouds();
+      return;
+    }
+
+    await scanGoogleDrive(data.access_token);
+    updateStats();
+    renderAll();
+  } else {
+    showToast(`↻ Sincronizando...`);
+    setTimeout(() => showToast('✓ Sincronizado'), 2000);
+  }
 }
 
 async function disconnectCloud(id) {
-  const c=CLOUD_SERVICES.find(x=>x.id===id);
-  if(!confirm(`¿Desconectar ${c.name}?`)) return;
+  const c = CLOUD_SERVICES.find(x => x.id === id);
+  if (!confirm(`¿Desconectar ${c.name}?`)) return;
 
   await _supabase.from('cloud_connections')
     .delete()
     .eq('user_id', currentUser.id)
     .eq('provider', id);
 
+  // Eliminar canciones de esa nube
+  await _supabase.from('songs')
+    .delete()
+    .eq('user_id', currentUser.id)
+    .eq('cloud_provider', id);
+
   delete connectedClouds[id];
-  buildLibrary(); updateStats(); renderAll();
+  await loadSongsFromDB();
+  buildLibrary();
+  updateStats();
+  renderAll();
   showToast(`${c.name} desconectado`);
 }
 
-function syncCloud(id) {
-  const c=CLOUD_SERVICES.find(x=>x.id===id);
-  if (id === 'gdrive') {
-    syncGoogleDrive();
-  } else {
-    showToast(`↻ Sincronizando ${c.name}...`);
-    setTimeout(()=>showToast(`✓ ${c.name} sincronizado`),2000);
-  }
+function closeModal() {
+  document.getElementById('oauthModal').classList.remove('show');
+  pendingCloud = null;
 }
-
-// ══ GOOGLE DRIVE REAL ══
-async function syncGoogleDrive() {
-  showToast('↻ Escaneando Google Drive...');
-
-  // Obtener el token de acceso de la sesión actual
-  const { data: { session } } = await _supabase.auth.getSession();
-  const accessToken = session?.provider_token;
-
-  if (!accessToken) {
-    showToast('⚠ Reconecta tu cuenta de Google para dar acceso a Drive');
-    // Pedir reconexión con scope de Drive
-    await _supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        redirectTo: 'https://sonata-ecru.vercel.app',
-        scopes: 'https://www.googleapis.com/auth/drive.readonly',
-        queryParams: { access_type: 'offline', prompt: 'consent' }
-      }
-    });
-    return;
-  }
-
-  try {
-    // Buscar archivos de música en Google Drive
-    const tipos = "mimeType='audio/mpeg' or mimeType='audio/flac' or mimeType='audio/wav' or mimeType='audio/ogg' or mimeType='audio/x-m4a'";
-    const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(tipos)}&fields=files(id,name,size,mimeType)&pageSize=200`;
-
-    const res = await fetch(url, {
-      headers: { Authorization: `Bearer ${accessToken}` }
-    });
-    const data = await res.json();
-
-    if (!data.files || data.files.length === 0) {
-      showToast('No se encontraron archivos de música en tu Drive');
-      return;
-    }
-
-    showToast(`✓ Encontradas ${data.files.length} canciones en Drive`);
-
-    // Guardar cada canción en Supabase
-    let guardadas = 0;
-    for (const file of data.files) {
-      const nombre = file.name.replace(/\.(mp3|flac|wav|ogg|m4a)$/i, '');
-      const partes  = nombre.split(' - ');
-      const artista = partes.length > 1 ? partes[0].trim() : 'Desconocido';
-      const titulo  = partes.length > 1 ? partes.slice(1).join(' - ').trim() : nombre;
-      const fileUrl = `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`;
-
-      const { error } = await _supabase.from('songs').upsert({
-        user_id:       currentUser.id,
-        title:         titulo,
-        artist:        artista,
-        album:         'Google Drive',
-        file_path:     file.id,
-        file_url:      fileUrl,
-        cloud_provider:'gdrive',
-        duration:      0
-      }, { onConflict: 'user_id,file_path' });
-
-      if (!error) guardadas++;
-    }
-
-    showToast(`✓ ${guardadas} canciones guardadas en tu biblioteca`);
-
-    // Recargar canciones desde Supabase
-    await loadSongsFromDB();
-    updateStats();
-    renderAll();
-
-  } catch (err) {
-    showToast('Error al leer Drive: ' + err.message);
-  }
-}
-
-// Cargar canciones reales desde Supabase
-async function loadSongsFromDB() {
-  const { data } = await _supabase
-    .from('songs')
-    .select('*')
-    .eq('user_id', currentUser.id)
-    .order('title', { ascending: true });
-
-  if (data && data.length > 0) {
-    // Convertir formato Supabase al formato de la app
-    songs = data.map((s, i) => ({
-      id:       i + 1,
-      dbId:     s.id,
-      title:    s.title || 'Sin título',
-      artist:   s.artist || 'Desconocido',
-      album:    s.album || 'Sin álbum',
-      duration: s.duration ? formatTime(s.duration) : '0:00',
-      emoji:    '🎵',
-      cloud:    s.cloud_provider || 'gdrive',
-      fileUrl:  s.file_url,
-      liked:    s.liked || false
-    }));
-  }
-}
+function confirmConnect() { closeModal(); }
 
 // ══ PLAYLISTS ══
 async function createPlaylist() {
