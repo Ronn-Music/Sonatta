@@ -892,7 +892,7 @@
 
       <div class="sidebar-clouds">
         <div class="sidebar-section-title">Configuración</div>
-        <div class="nav-item" onclick="showView('clouds',this)">
+        <div class="nav-item" onclick="showView('clouds',this);renderClouds()">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 10h-1.26A8 8 0 109 20h9a5 5 0 000-10z"/></svg>
           Gestionar nubes
         </div>
@@ -1286,7 +1286,6 @@ async function initApp() {
   await loadPlaylists();
   await loadSongsFromDB();
 
-  buildLibrary();
   updateStats();
   renderAll();
 }
@@ -1352,15 +1351,19 @@ async function loadPlaylists() {
 }
 
 function buildLibrary() {
-  const ids = Object.keys(connectedClouds).filter(k=>connectedClouds[k]);
-  // Si hay canciones reales de DB las usa, sino muestra demo
-  if (songs.length === 0) {
-    songs = ids.length === 0 ? [] : DEMO_SONGS.filter(s=>ids.includes(s.cloud));
-  }
+  // No tocar songs — ya vienen cargadas desde loadSongsFromDB()
+  // Las canciones de demo solo se usan si no hay sesión real de Supabase
 }
 
 function updateStats() {
-  const cc = Object.keys(connectedClouds).filter(k=>connectedClouds[k]).length;
+  // Contar nubes únicas realmente conectadas (sin contar claves internas)
+  const accounts = connectedClouds._accounts || [];
+  const connectedProviders = new Set(
+    accounts
+      .filter(a => !(a.token_expires_at && new Date(a.token_expires_at) < new Date()))
+      .map(a => a.provider)
+  );
+  const cc = connectedProviders.size;
   const albums  = [...new Set(songs.map(s=>s.album))];
   const artists = [...new Set(songs.map(s=>s.artist))];
   document.getElementById('statSongs').textContent   = songs.length;
@@ -1382,14 +1385,24 @@ function renderAll() {
   renderAlbums(); renderArtists(); renderClouds(); renderPlaylists();
 }
 
+function songColorIdx(id) {
+  // Funciona tanto con IDs numéricos como con UUIDs de Supabase
+  if (typeof id === 'number') return id % 6;
+  const str = String(id);
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) hash = (hash * 31 + str.charCodeAt(i)) | 0;
+  return Math.abs(hash) % 6;
+}
+
 function songRowHTML(song, idx) {
   const cl = {gdrive:'Drive',onedrive:'OneDrive',dropbox:'Dropbox',box:'Box',s3:'S3',pcloud:'pCloud'};
   const playing = currentSongIdx !== -1 && songs[currentSongIdx]?.id === song.id;
+  const colorIdx = songColorIdx(song.id);
   return `
-    <div class="song-row ${playing?'playing':''}" onclick="playSongById(${song.id})">
+    <div class="song-row ${playing?'playing':''}" onclick="playSongById('${song.id}')">
       <div class="song-num">${playing?`<div class="eq-bars"><div class="eq-bar"></div><div class="eq-bar"></div><div class="eq-bar"></div></div>`:idx}</div>
       <div class="song-info-cell">
-        <div class="song-mini-art" style="background:${ALBUM_COLORS[song.id%6]}">${song.emoji}</div>
+        <div class="song-mini-art" style="background:${ALBUM_COLORS[colorIdx]}">${song.emoji}</div>
         <span class="song-title">${song.title}<span class="song-cloud-badge">${cl[song.cloud]||song.cloud}</span></span>
       </div>
       <div class="song-artist-cell">${song.artist}</div>
@@ -1409,8 +1422,8 @@ function renderRecentGrid() {
   if (songs.length===0) { el.innerHTML=`<div style="color:var(--text3);font-size:0.83rem;padding:8px 0">Conecta una nube para ver álbumes aquí.</div>`; return; }
   const albums = [...new Map(songs.map(s=>[s.album,s])).values()].slice(0,6);
   el.innerHTML = albums.map(s=>`
-    <div class="album-card" onclick="playSongById(${s.id})">
-      <div class="album-art" style="background:${ALBUM_COLORS[s.id%6]}">${s.emoji}</div>
+    <div class="album-card" onclick="playSongById('${s.id}')">
+      <div class="album-art" style="background:${ALBUM_COLORS[songColorIdx(s.id)]}">${s.emoji}</div>
       <div class="album-info"><div class="album-name">${s.album}</div><div class="album-artist">${s.artist}</div></div>
     </div>`).join('');
 }
@@ -1424,8 +1437,8 @@ function renderAlbums() {
   const m = {}; songs.forEach(s=>{ if(!m[s.album]) m[s.album]={...s,count:0}; m[s.album].count++; });
   const a = Object.values(m);
   el.innerHTML = a.length===0 ? empty('Sin álbumes. Conecta una nube.') : a.map(s=>`
-    <div class="album-card" onclick="playSongById(${s.id})">
-      <div class="album-art" style="background:${ALBUM_COLORS[s.id%6]}">${s.emoji}</div>
+    <div class="album-card" onclick="playSongById('${s.id}')">
+      <div class="album-art" style="background:${ALBUM_COLORS[songColorIdx(s.id)]}">${s.emoji}</div>
       <div class="album-info"><div class="album-name">${s.album}</div><div class="album-artist">${s.artist}</div><div class="album-count">${s.count} canción${s.count!==1?'es':''}</div></div>
     </div>`).join('');
 }
@@ -1434,8 +1447,8 @@ function renderArtists() {
   const m = {}; songs.forEach(s=>{ if(!m[s.artist]) m[s.artist]={...s,count:0}; m[s.artist].count++; });
   const a = Object.values(m);
   el.innerHTML = a.length===0 ? empty('Sin artistas. Conecta una nube.') : a.map(s=>`
-    <div class="album-card" onclick="playSongById(${s.id})">
-      <div class="album-art" style="background:${ALBUM_COLORS[s.id%6]};border-radius:50% 50% 0 0">${s.emoji}</div>
+    <div class="album-card" onclick="playSongById('${s.id}')">
+      <div class="album-art" style="background:${ALBUM_COLORS[songColorIdx(s.id)]};border-radius:50% 50% 0 0">${s.emoji}</div>
       <div class="album-info"><div class="album-name">${s.artist}</div><div class="album-count">${s.count} canción${s.count!==1?'es':''}</div></div>
     </div>`).join('');
 }
@@ -1542,8 +1555,9 @@ audioEl.addEventListener('timeupdate', () => {
 });
 
 async function playSongById(id) {
-  const idx = songs.findIndex(s=>s.id===id);
-  if (idx===-1) return;
+  // Comparar como string para soportar UUIDs de Supabase
+  const idx = songs.findIndex(s => String(s.id) === String(id));
+  if (idx === -1) return;
   currentSongIdx = idx;
   const song = songs[idx];
 
@@ -1842,15 +1856,20 @@ async function _saveGdriveToken(accessToken, expiresIn, emailHint) {
   connectedClouds[accountKey] = { token: accessToken, email: accountEmail };
   connectedClouds['gdrive']   = true;  // para compatibilidad con resto del código
 
-  showToast('✓ ' + accountEmail + ' conectada — escaneando...');
+  showToast('✓ ' + accountEmail + ' conectada — escaneando música...');
 
   await scanGoogleDrive(accessToken, accountKey);
+
+  // Recargar todo desde Supabase y refrescar UI
   await loadClouds();
   await loadSongsFromDB();
-  buildLibrary();
   updateStats();
   renderAll();
-  showView('songs', document.querySelectorAll('.nav-item')[1]);
+
+  // Navegar a Canciones y mostrar resultado final
+  const songsNavItem = document.querySelector('.nav-item[onclick*="songs"]');
+  showView('songs', songsNavItem);
+  showToast('🎵 ' + songs.length + ' canciones en tu biblioteca');
 }
 
 // Escanear Google Drive y guardar canciones en Supabase
@@ -1937,7 +1956,7 @@ async function scanGoogleDrive(token, accountKey) {
 
     console.log('Scan completo: ' + guardadas + ' guardadas, ' + errores + ' errores');
     showToast('✓ ' + guardadas + ' canciones de ' + label + (errores > 0 ? ' (' + errores + ' errores)' : ''));
-    await loadSongsFromDB();
+    // NO llamar loadSongsFromDB aquí — el caller (_saveGdriveToken / syncCloud) lo hace después
 
   } catch(err) {
     console.error('scanGoogleDrive error:', err);
@@ -1972,8 +1991,10 @@ async function syncCloud(id, accountKey) {
       await scanGoogleDrive(row.access_token, row.account_key);
     }
     await loadClouds();
+    await loadSongsFromDB();
     updateStats();
     renderAll();
+    showToast('✓ Sincronización completa — ' + songs.length + ' canciones');
   } else {
     showToast('↻ Sincronizando...');
     setTimeout(() => showToast('✓ Sincronizado'), 2000);
@@ -2002,7 +2023,6 @@ async function disconnectCloud(id, accountKey) {
 
   await loadClouds();
   await loadSongsFromDB();
-  buildLibrary();
   updateStats();
   renderAll();
   showToast(label + ' desconectado');
