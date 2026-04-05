@@ -1220,9 +1220,30 @@ async function logout() {
 
 // VERIFICAR SESIÓN ACTIVA al cargar
 async function checkSession() {
-  // Si hay hash de OAuth en la URL, procesarlo ANTES que nada
-  // (Esto ocurre si el popup no pudo abrirse y Google redirigió aquí directamente)
   const hasOAuthHash = window.location.hash.includes('access_token');
+
+  // ── Si somos el POPUP de OAuth, mandar el token al padre y cerrar YA ──
+  // Hacerlo antes de que Supabase consuma el hash
+  if (hasOAuthHash && window.opener && !window.opener.closed) {
+    const params      = new URLSearchParams(window.location.hash.replace('#', ''));
+    const accessToken = params.get('access_token');
+    const expiresIn   = parseInt(params.get('expires_in') || '3600');
+    const stateRaw    = params.get('state') || '{}';
+    let state = {};
+    try { state = JSON.parse(decodeURIComponent(stateRaw)); } catch {}
+
+    if (accessToken && state.provider === 'gdrive') {
+      window.opener.postMessage({
+        type:         'gdrive_token',
+        token:        accessToken,
+        expiresIn,
+        nonce:        state.nonce,
+        accountEmail: null
+      }, window.location.origin);
+      window.close();
+      return;   // no continuar — el popup se cierra
+    }
+  }
 
   _supabase.auth.onAuthStateChange((event, session) => {
     if (event === 'SIGNED_IN' && session?.user) {
@@ -1234,14 +1255,10 @@ async function checkSession() {
 
   if (session?.user) {
     loginSuccess(session.user);
-    // Detectar callback de Drive DESPUÉS de que la app cargue
+    // Caso raro: redirect en ventana principal (sin popup)
     if (hasOAuthHash) {
       setTimeout(() => detectCloudCallback(), 600);
     }
-  } else if (hasOAuthHash) {
-    // Si no hay sesión pero hay token OAuth, puede que el popup lo reciba
-    // Intentar igualmente (si estamos en el popup, se cerrará solo)
-    setTimeout(() => detectCloudCallback(), 200);
   }
 }
 
@@ -1649,9 +1666,7 @@ function toggleMute() {
 // Soporta múltiples cuentas del mismo proveedor (account_key único)
 
 const GOOGLE_CLIENT_ID = '980361737078-vk91pdvckri8pemueg44tlmebbu1shfo.apps.googleusercontent.com';
-// La redirect_uri debe coincidir EXACTAMENTE con lo registrado en Google Cloud Console
-// Para desarrollo local: http://localhost:PORT  |  Para producción: https://sonata-ecru.vercel.app
-const GOOGLE_REDIRECT = window.location.origin + window.location.pathname.replace(/\/[^/]*$/, '') + '/gdrive-callback.html';
+const GOOGLE_REDIRECT = 'https://sonata-ecru.vercel.app';
 
 let _oauthPopup = null;
 let _oauthInterval = null;
@@ -1673,19 +1688,18 @@ function startConnect(id) {
 
 // ─── GOOGLE DRIVE OAUTH VÍA POPUP ──────────────────────────────────────────
 function connectGoogleDrivePopup() {
-  // Genera un nonce único para este intento de conexión
   const nonce = Math.random().toString(36).slice(2);
   sessionStorage.setItem('gdrive_oauth_nonce', nonce);
 
-  const scope       = 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/userinfo.email';
-  const redirectUri = window.location.origin + window.location.pathname; // misma página
+  const redirectUri = 'https://sonata-ecru.vercel.app';   // ← exacto, igual al registrado
+  const scope       = 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/oauth2/v2/userinfo.email';
   const authUrl     = 'https://accounts.google.com/o/oauth2/v2/auth'
     + '?client_id='     + encodeURIComponent(GOOGLE_CLIENT_ID)
     + '&redirect_uri='  + encodeURIComponent(redirectUri)
     + '&response_type=token'
     + '&scope='         + encodeURIComponent(scope)
     + '&state='         + encodeURIComponent(JSON.stringify({ nonce, provider: 'gdrive' }))
-    + '&prompt=select_account';   // fuerza elegir cuenta → permite varias cuentas
+    + '&prompt=select_account';
 
   // Abrir popup centrado
   const w = 520, h = 620;
