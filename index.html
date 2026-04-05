@@ -1316,19 +1316,34 @@ async function loadClouds() {
 }
 
 async function loadSongsFromDB() {
-  const { data, error } = await _supabase
-    .from('songs')
-    .select('*')
-    .eq('user_id', currentUser.id)
-    .order('title', { ascending: true });
+  // Supabase tiene límite de 1000 filas por defecto — hay que paginar
+  let allSongs = [];
+  let from = 0;
+  const PAGE = 1000;
 
-  if (error) {
-    console.error('Error cargando canciones:', error);
-    return;
+  while (true) {
+    const { data, error } = await _supabase
+      .from('songs')
+      .select('id, title, artist, album, duration, file_path, file_url, cloud_provider, cover_url, liked')
+      .eq('user_id', currentUser.id)
+      .order('title', { ascending: true })
+      .range(from, from + PAGE - 1);
+
+    if (error) {
+      console.error('Error cargando canciones (página ' + from + '):', error);
+      break;
+    }
+
+    if (!data || data.length === 0) break;
+
+    allSongs = allSongs.concat(data);
+    console.log('Cargadas ' + allSongs.length + ' canciones...');
+
+    if (data.length < PAGE) break; // última página
+    from += PAGE;
   }
 
-  // Mapear a objeto interno — solo columnas que existen en la tabla songs real
-  songs = (data || []).map(function(s) {
+  songs = allSongs.map(function(s) {
     return {
       id:       s.id,
       title:    s.title    || 'Sin título',
@@ -1344,7 +1359,7 @@ async function loadSongsFromDB() {
     };
   });
 
-  console.log('Canciones cargadas desde DB:', songs.length);
+  console.log('Total canciones cargadas desde DB:', songs.length);
 }
 
 async function loadPlaylists() {
@@ -1378,25 +1393,47 @@ function updateStats() {
 }
 
 // ══ RENDER ══
+// Adjunta listeners de click a filas de canciones usando data-songid
+function attachSongRowListeners(container) {
+  if (!container) return;
+  container.querySelectorAll('.song-row[data-songid]').forEach(function(row) {
+    row.addEventListener('click', function() {
+      playSongById(this.getAttribute('data-songid'));
+    });
+  });
+}
+
 function renderAll() {
   renderHomeSongs(); renderRecentGrid(); renderAllSongs();
   renderAlbums(); renderArtists(); renderClouds(); renderPlaylists();
 }
 
+function songColorIdx(id) {
+  // Soporta UUIDs y números
+  if (typeof id === 'number') return id % 6;
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
+  return Math.abs(h) % 6;
+}
+
 function songRowHTML(song, idx) {
   const cl = {gdrive:'Drive',onedrive:'OneDrive',dropbox:'Dropbox',box:'Box',s3:'S3',pcloud:'pCloud'};
   const playing = currentSongIdx !== -1 && songs[currentSongIdx]?.id === song.id;
-  return `
-    <div class="song-row ${playing?'playing':''}" onclick="playSongById(${song.id})">
-      <div class="song-num">${playing?`<div class="eq-bars"><div class="eq-bar"></div><div class="eq-bar"></div><div class="eq-bar"></div></div>`:idx}</div>
-      <div class="song-info-cell">
-        <div class="song-mini-art" style="background:${ALBUM_COLORS[song.id%6]}">${song.emoji}</div>
-        <span class="song-title">${song.title}<span class="song-cloud-badge">${cl[song.cloud]||song.cloud}</span></span>
-      </div>
-      <div class="song-artist-cell">${song.artist}</div>
-      <div class="song-album-cell">${song.album}</div>
-      <div class="song-dur">${song.duration}</div>
-    </div>`;
+  const ci = songColorIdx(song.id);
+  const artStyle = song.coverUrl
+    ? "background:url('" + song.coverUrl + "') center/cover no-repeat"
+    : "background:" + ALBUM_COLORS[ci];
+  // Usamos data-songid para evitar problemas de UUIDs con comillas en onclick
+  return '<div class="song-row ' + (playing?'playing':'') + '" data-songid="' + song.id + '">'
+    + '<div class="song-num">' + (playing?'<div class="eq-bars"><div class="eq-bar"></div><div class="eq-bar"></div><div class="eq-bar"></div></div>':idx) + '</div>'
+    + '<div class="song-info-cell">'
+    + '<div class="song-mini-art" style="' + artStyle + '">' + (song.coverUrl?'':song.emoji) + '</div>'
+    + '<span class="song-title">' + song.title + '<span class="song-cloud-badge">' + (cl[song.cloud]||song.cloud) + '</span></span>'
+    + '</div>'
+    + '<div class="song-artist-cell">' + song.artist + '</div>'
+    + '<div class="song-album-cell">' + song.album + '</div>'
+    + '<div class="song-dur">' + song.duration + '</div>'
+    + '</div>';
 }
 
 function empty(msg) { return `<div style="padding:28px;text-align:center;color:var(--text3)">${msg}</div>`; }
@@ -1404,41 +1441,55 @@ function empty(msg) { return `<div style="padding:28px;text-align:center;color:v
 function renderHomeSongs() {
   const el = document.getElementById('homeSongsList');
   el.innerHTML = songs.length===0 ? empty('Conecta una nube para ver tus canciones aquí 🎵') : songs.slice(0,8).map((s,i)=>songRowHTML(s,i+1)).join('');
+  attachSongRowListeners(el);
 }
 function renderRecentGrid() {
   const el = document.getElementById('recentGrid');
   if (songs.length===0) { el.innerHTML=`<div style="color:var(--text3);font-size:0.83rem;padding:8px 0">Conecta una nube para ver álbumes aquí.</div>`; return; }
   const albums = [...new Map(songs.map(s=>[s.album,s])).values()].slice(0,6);
-  el.innerHTML = albums.map(s=>`
-    <div class="album-card" onclick="playSongById(${s.id})">
-      <div class="album-art" style="background:${ALBUM_COLORS[s.id%6]}">${s.emoji}</div>
+  el.innerHTML = albums.map(s=>{
+    const ai = songs.findIndex(x=>x.id===s.id);
+    const ci = songColorIdx(s.id);
+    const artSt = s.coverUrl ? `background:url('${s.coverUrl}') center/cover no-repeat` : `background:${ALBUM_COLORS[ci]}`;
+    return `<div class="album-card" onclick="playSongByIndex(${ai})">
+      <div class="album-art" style="${artSt}">${s.coverUrl?'':s.emoji}</div>
       <div class="album-info"><div class="album-name">${s.album}</div><div class="album-artist">${s.artist}</div></div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 function renderAllSongs(filter='') {
   const el = document.getElementById('allSongsList');
   const f = songs.filter(s=>s.title.toLowerCase().includes(filter.toLowerCase())||s.artist.toLowerCase().includes(filter.toLowerCase())||s.album.toLowerCase().includes(filter.toLowerCase()));
   el.innerHTML = f.length===0 ? empty(songs.length===0?'Conecta una nube para ver tu música 🎵':'Sin resultados') : f.map((s,i)=>songRowHTML(s,i+1)).join('');
+  attachSongRowListeners(el);
 }
 function renderAlbums() {
   const el = document.getElementById('albumsGrid');
   const m = {}; songs.forEach(s=>{ if(!m[s.album]) m[s.album]={...s,count:0}; m[s.album].count++; });
   const a = Object.values(m);
-  el.innerHTML = a.length===0 ? empty('Sin álbumes. Conecta una nube.') : a.map(s=>`
-    <div class="album-card" onclick="playSongById(${s.id})">
-      <div class="album-art" style="background:${ALBUM_COLORS[s.id%6]}">${s.emoji}</div>
+  el.innerHTML = a.length===0 ? empty('Sin álbumes. Conecta una nube.') : a.map(s=>{
+    const ai = songs.findIndex(x=>x.id===s.id);
+    const ci = songColorIdx(s.id);
+    const artSt = s.coverUrl ? `background:url('${s.coverUrl}') center/cover no-repeat` : `background:${ALBUM_COLORS[ci]}`;
+    return `<div class="album-card" onclick="playSongByIndex(${ai})">
+      <div class="album-art" style="${artSt}">${s.coverUrl?'':s.emoji}</div>
       <div class="album-info"><div class="album-name">${s.album}</div><div class="album-artist">${s.artist}</div><div class="album-count">${s.count} canción${s.count!==1?'es':''}</div></div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 function renderArtists() {
   const el = document.getElementById('artistsGrid');
   const m = {}; songs.forEach(s=>{ if(!m[s.artist]) m[s.artist]={...s,count:0}; m[s.artist].count++; });
   const a = Object.values(m);
-  el.innerHTML = a.length===0 ? empty('Sin artistas. Conecta una nube.') : a.map(s=>`
-    <div class="album-card" onclick="playSongById(${s.id})">
-      <div class="album-art" style="background:${ALBUM_COLORS[s.id%6]};border-radius:50% 50% 0 0">${s.emoji}</div>
+  el.innerHTML = a.length===0 ? empty('Sin artistas. Conecta una nube.') : a.map(s=>{
+    const ai = songs.findIndex(x=>x.id===s.id);
+    const ci = songColorIdx(s.id);
+    const artSt = s.coverUrl ? `background:url('${s.coverUrl}') center/cover no-repeat` : `background:${ALBUM_COLORS[ci]}`;
+    return `<div class="album-card" onclick="playSongByIndex(${ai})">
+      <div class="album-art" style="${artSt};border-radius:50% 50% 0 0">${s.coverUrl?'':s.emoji}</div>
       <div class="album-info"><div class="album-name">${s.artist}</div><div class="album-count">${s.count} canción${s.count!==1?'es':''}</div></div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 function renderClouds() {
   const el = document.getElementById('cloudsGrid');
@@ -1542,16 +1593,32 @@ audioEl.addEventListener('timeupdate', () => {
   updateProgressUI();
 });
 
+// Llamado desde filas de canciones — recibe índice numérico del array (sin problemas de UUID)
+async function playSongByIndex(idx) {
+  if (idx < 0 || idx >= songs.length) return;
+  await playSongById(songs[idx].id);
+}
+
 async function playSongById(id) {
-  const idx = songs.findIndex(s=>s.id===id);
-  if (idx===-1) return;
+  // Comparar como string para soportar UUIDs
+  const idx = songs.findIndex(s => String(s.id) === String(id));
+  if (idx === -1) return;
   currentSongIdx = idx;
   const song = songs[idx];
 
   document.getElementById('npTitle').textContent  = song.title;
   document.getElementById('npArtist').textContent = song.artist;
-  document.getElementById('npArt').textContent    = song.emoji;
-  document.getElementById('npArt').style.background = ALBUM_COLORS[song.id%6];
+  const npArt = document.getElementById('npArt');
+  if (song.coverUrl) {
+    npArt.style.backgroundImage = 'url(' + song.coverUrl + ')';
+    npArt.style.backgroundSize  = 'cover';
+    npArt.style.backgroundPosition = 'center';
+    npArt.textContent = '';
+  } else {
+    npArt.style.backgroundImage = '';
+    npArt.style.background = ALBUM_COLORS[songColorIdx(song.id)];
+    npArt.textContent = song.emoji;
+  }
   document.getElementById('npHeart').textContent = song.liked?'♥':'♡';
   document.getElementById('npHeart').classList.toggle('liked', song.liked);
 
@@ -1873,7 +1940,7 @@ async function scanGoogleDrive(token) {
     do {
       let url = 'https://www.googleapis.com/drive/v3/files'
         + '?q='      + encodeURIComponent(tipos)
-        + '&fields=' + encodeURIComponent('nextPageToken,files(id,name,mimeType)')
+        + '&fields=' + encodeURIComponent('nextPageToken,files(id,name,mimeType,thumbnailLink)')
         + '&pageSize=1000';
       if (pageToken) url += '&pageToken=' + encodeURIComponent(pageToken);
 
@@ -1936,7 +2003,8 @@ async function scanGoogleDrive(token) {
           duration:       0,
           file_path:      'gdrive:' + file.id,
           file_url:       'https://www.googleapis.com/drive/v3/files/' + file.id + '?alt=media',
-          cloud_provider: 'gdrive'
+          cloud_provider: 'gdrive',
+          cover_url:      file.thumbnailLink ? file.thumbnailLink.replace('=s220', '=s400') : null
         };
       });
 
