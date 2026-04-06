@@ -534,16 +534,17 @@
   .album-count { font-size: 0.68rem; color: var(--text3); margin-top: 2px; }
 
   /* SONGS LIST */
-  .songs-list { background: var(--card); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; margin-bottom: 26px; }
+  .songs-list { background: var(--card); border: 1px solid var(--border); border-radius: 14px; overflow: visible; margin-bottom: 26px; }
   .songs-list-header {
-    display: grid; grid-template-columns: 40px 1fr 200px 100px 80px;
+    display: grid; grid-template-columns: 40px 1fr 200px 100px 60px 30px;
     padding: 9px 16px; border-bottom: 1px solid var(--border);
     font-size: 0.68rem; color: var(--text3); text-transform: uppercase; letter-spacing: 1px;
   }
   .song-row {
-    display: grid; grid-template-columns: 40px 1fr 200px 100px 80px;
+    display: grid; grid-template-columns: 40px 1fr 200px 100px 60px 30px;
     padding: 9px 16px; align-items: center; cursor: pointer;
     transition: background 0.15s; border-bottom: 1px solid rgba(255,255,255,0.03);
+    position: relative; overflow: visible;
   }
   .song-row:hover { background: rgba(124,92,252,0.08); }
   .song-row.playing { background: rgba(124,92,252,0.15); }
@@ -823,19 +824,19 @@
   .song-grid-artist { font-size:0.7rem; color:var(--text3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 
   /* ══ 3-DOT SONG MENU ══ */
-  .song-menu-wrap { position:relative; margin-left:auto; flex-shrink:0; }
+  .song-menu-wrap { position:relative; display:flex; align-items:center; justify-content:center; }
   .song-menu-btn {
     background:none; border:none; color:var(--text3); cursor:pointer;
-    padding:4px 8px; border-radius:6px; font-size:1rem; line-height:1;
+    padding:4px 8px; border-radius:6px; font-size:1.1rem; line-height:1;
     transition:color 0.15s; opacity:0;
   }
   .song-row:hover .song-menu-btn { opacity:1; }
   .song-menu-btn:hover { color:var(--text); }
   .song-dropdown {
-    position:absolute; right:0; top:100%; z-index:200;
+    position:fixed; z-index:9999;
     background:var(--bg3); border:1px solid var(--border);
-    border-radius:10px; padding:6px; min-width:190px;
-    box-shadow:0 10px 40px rgba(0,0,0,0.5); display:none;
+    border-radius:10px; padding:6px; min-width:200px;
+    box-shadow:0 10px 40px rgba(0,0,0,0.6); display:none;
   }
   .song-dropdown.open { display:block; }
   .song-dropdown-item {
@@ -1556,8 +1557,19 @@ document.addEventListener('click', function(e) {
       const prev = document.getElementById('dd-'+openDropdownId);
       if (prev) prev.classList.remove('open');
     }
-    dd.classList.toggle('open');
-    openDropdownId = dd.classList.contains('open') ? sid : null;
+    const wasOpen = dd.classList.contains('open');
+    dd.classList.remove('open');
+    if (!wasOpen) {
+      // Position the dropdown using fixed coords
+      const rect = menuBtn.getBoundingClientRect();
+      dd.style.top  = (rect.bottom + 4) + 'px';
+      dd.style.right = (window.innerWidth - rect.right) + 'px';
+      dd.style.left = 'auto';
+      dd.classList.add('open');
+      openDropdownId = sid;
+    } else {
+      openDropdownId = null;
+    }
     return;
   }
   // Close dropdowns when clicking outside
@@ -1574,11 +1586,18 @@ function renderAll() {
 }
 
 function songArtStyle(song) {
-  if (song.coverUrl) return 'background:url('+JSON.stringify(song.coverUrl)+') center/cover no-repeat';
+  if (song.coverUrl) return 'background:url('+JSON.stringify(song.coverUrl)+') center/cover no-repeat;color:transparent';
   return 'background:'+ART_COLORS[artistColorIdx(song.artist)];
 }
 function songInitial(song) {
   return song.coverUrl ? '' : (song.artist||'?').charAt(0).toUpperCase();
+}
+function songArtImg(song, cls, style) {
+  if (song.coverUrl) {
+    return '<img src="'+song.coverUrl+'" class="'+cls+'" style="'+style+';width:100%;height:100%;object-fit:cover;display:block" onerror="this.style.display=\'none\';this.nextSibling&&(this.nextSibling.style.display=\'flex\')">'
+      + '<div class="'+cls+'-fallback" style="'+style+';display:none;align-items:center;justify-content:center;background:'+ART_COLORS[artistColorIdx(song.artist)]+';font-size:inherit;color:rgba(255,255,255,0.25);font-weight:800">'+(song.artist||'?').charAt(0).toUpperCase()+'</div>';
+  }
+  return '';
 }
 
 // 3-dot dropdown HTML
@@ -1607,10 +1626,13 @@ function songMenuHTML(song) {
 function songRowHTML(song, idx) {
   const cl = { gdrive:'Drive',onedrive:'OneDrive',dropbox:'Dropbox',box:'Box',s3:'S3',pcloud:'pCloud' };
   const playing = currentSongIdx !== -1 && songs[currentSongIdx] && songs[currentSongIdx].id === song.id;
-  return '<div class="song-row '+(playing?'playing':'')+'" data-songid="'+song.id+'" style="display:flex;align-items:center">'
+  const miniArtContent = song.coverUrl
+    ? '<img src="'+song.coverUrl+'" style="width:34px;height:34px;border-radius:6px;object-fit:cover;flex-shrink:0;display:block" onerror="this.outerHTML=\'<div style=&quot;width:34px;height:34px;border-radius:6px;background:'+ART_COLORS[artistColorIdx(song.artist)]+';&quot;></div>\'">'
+    : '<div class="song-mini-art" style="background:'+ART_COLORS[artistColorIdx(song.artist)]+';font-size:0.65rem;font-weight:700;color:rgba(255,255,255,0.6);display:flex;align-items:center;justify-content:center">'+(song.artist||'?').charAt(0).toUpperCase()+'</div>';
+  return '<div class="song-row '+(playing?'playing':'')+'" data-songid="'+song.id+'">'
     + '<div class="song-num">'+(playing?'<div class="eq-bars"><div class="eq-bar"></div><div class="eq-bar"></div><div class="eq-bar"></div></div>':idx)+'</div>'
     + '<div class="song-info-cell">'
-    + '<div class="song-mini-art" style="'+songArtStyle(song)+';font-size:0.65rem;font-weight:700;color:rgba(255,255,255,0.6);display:flex;align-items:center;justify-content:center">'+songInitial(song)+'</div>'
+    + miniArtContent
     + '<span class="song-title">'+song.title+'<span class="song-cloud-badge">'+(cl[song.cloud]||song.cloud)+'</span></span>'
     + '</div>'
     + '<div class="song-artist-cell">'+song.artist+'</div>'
@@ -1622,8 +1644,12 @@ function songRowHTML(song, idx) {
 
 function songGridCardHTML(song) {
   const playing = currentSongIdx !== -1 && songs[currentSongIdx] && songs[currentSongIdx].id === song.id;
+  const artContent = song.coverUrl
+    ? '<img src="'+song.coverUrl+'" style="width:100%;height:100%;object-fit:cover;display:block;position:absolute;inset:0" onerror="this.style.display=\'none\'">'
+    + '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:'+ART_COLORS[artistColorIdx(song.artist)]+';position:absolute;inset:0;z-index:-1;font-size:2.2rem;font-weight:900;color:rgba(255,255,255,0.2)">'+(song.artist||'?').charAt(0).toUpperCase()+'</div>'
+    : '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:'+ART_COLORS[artistColorIdx(song.artist)]+';font-size:2.2rem;font-weight:900;color:rgba(255,255,255,0.2)">'+(song.artist||'?').charAt(0).toUpperCase()+'</div>';
   return '<div class="song-grid-card '+(playing?'playing':'')+'" data-songid="'+song.id+'">'
-    + '<div class="song-grid-art" style="'+songArtStyle(song)+'">'+songInitial(song)+'</div>'
+    + '<div class="song-grid-art" style="position:relative;overflow:hidden">'+artContent+'</div>'
     + '<div class="song-grid-info">'
     + '<div class="song-grid-title">'+song.title+'</div>'
     + '<div class="song-grid-artist">'+song.artist+'</div>'
@@ -1677,14 +1703,25 @@ function renderAllSongs(filter) {
 
 function renderAlbums() {
   const el = document.getElementById('albumsGrid'); if (!el) return;
-  const m = {}; songs.forEach(s => { if(!m[s.album]) m[s.album]={...s,count:0}; m[s.album].count++; });
+  const m = {}; songs.forEach(s => {
+    const key = s.album || 'Sin álbum';
+    if(!m[key]) m[key]={...s,album:key,count:0};
+    m[key].count++;
+    // Prefer a song with coverUrl as the representative
+    if (s.coverUrl && !m[key].coverUrl) { m[key].coverUrl = s.coverUrl; m[key].artist = s.artist; }
+  });
   const a = Object.values(m);
-  el.innerHTML = a.length===0 ? empty('Sin álbumes. Conecta una nube.') : a.map(s =>
-    '<div class="album-card" data-songid="'+s.id+'">'
-    + '<div class="album-art" style="'+songArtStyle(s)+';display:flex;align-items:center;justify-content:center;font-size:2rem;font-weight:800;color:rgba(255,255,255,0.25)">'+((s.album||'?').charAt(0).toUpperCase())+'</div>'
-    + '<div class="album-info"><div class="album-name">'+s.album+'</div><div class="album-artist">'+s.artist+'</div><div class="album-count">'+s.count+' canción'+(s.count!==1?'es':'')+'</div></div>'
-    + '</div>'
-  ).join('');
+  if (a.length === 0) { el.innerHTML = '<div style="padding:28px;text-align:center;color:var(--text3)">Sin álbumes. Conecta una nube.</div>'; return; }
+  el.innerHTML = a.map(s => {
+    const artContent = s.coverUrl
+      ? '<img src="'+s.coverUrl+'" style="width:100%;height:100%;object-fit:cover;display:block;position:absolute;inset:0" onerror="this.style.display=\'none\'">'
+        + '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:'+ART_COLORS[artistColorIdx(s.artist)]+';z-index:-1;font-size:2rem;font-weight:800;color:rgba(255,255,255,0.25)">'+(s.album||'?').charAt(0).toUpperCase()+'</div>'
+      : '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:'+ART_COLORS[artistColorIdx(s.artist)]+';font-size:2rem;font-weight:800;color:rgba(255,255,255,0.25)">'+(s.album||'?').charAt(0).toUpperCase()+'</div>';
+    return '<div class="album-card" data-songid="'+s.id+'">'
+      + '<div class="album-art" style="position:relative;overflow:hidden">'+artContent+'</div>'
+      + '<div class="album-info"><div class="album-name">'+s.album+'</div><div class="album-artist">'+s.artist+'</div><div class="album-count">'+s.count+' canción'+(s.count!==1?'es':'')+'</div></div>'
+      + '</div>';
+  }).join('');
 }
 function renderArtists() {
   const el = document.getElementById('artistsGrid'); if (!el) return;
@@ -1811,12 +1848,12 @@ function updateNpModal() {
   document.getElementById('npModalArtist').textContent = song.artist;
   const ph = document.getElementById('npModalPlaceholder');
   if (song.coverUrl) {
-    ph.style.backgroundImage = 'url('+JSON.stringify(song.coverUrl)+')';
-    ph.style.backgroundSize  = 'cover';
-    ph.style.backgroundPosition = 'center';
+    ph.innerHTML = '<img src="'+song.coverUrl+'" style="width:100%;height:100%;object-fit:cover;display:block;position:absolute;inset:0" onerror="this.style.display=\'none\'">';
+    ph.style.background = ART_COLORS[artistColorIdx(song.artist)];
+    ph.style.position = 'relative';
     ph.textContent = '';
   } else {
-    ph.style.backgroundImage = '';
+    ph.innerHTML = '';
     ph.style.background = ART_COLORS[artistColorIdx(song.artist)];
     ph.textContent = (song.artist||'?').charAt(0).toUpperCase();
   }
@@ -2127,12 +2164,20 @@ async function _saveGdriveToken(accessToken, expiresIn) {
 async function scanGoogleDrive(token) {
   showToast('⏳ Escaneando Google Drive...');
   try {
+    // Get user info to identify this specific account
+    let accountEmail = null;
+    try {
+      const uRes = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', { headers: { Authorization: 'Bearer '+token } });
+      const uData = await uRes.json();
+      accountEmail = uData.email || null;
+    } catch(e) { console.warn('No se pudo obtener email de cuenta:', e); }
+
     let allFiles=[], pageToken=null, pagina=1;
     const tipos = "(mimeType='audio/mpeg' or mimeType='audio/flac' or mimeType='audio/wav' or mimeType='audio/ogg' or mimeType='audio/x-m4a' or mimeType='audio/mp4')";
     do {
       let url = 'https://www.googleapis.com/drive/v3/files'
         + '?q='+encodeURIComponent(tipos)
-        + '&fields='+encodeURIComponent('nextPageToken,files(id,name,mimeType)')
+        + '&fields='+encodeURIComponent('nextPageToken,files(id,name,mimeType,parents)')
         + '&pageSize=1000';
       if (pageToken) url += '&pageToken='+encodeURIComponent(pageToken);
       showToast('⏳ Escaneando página '+pagina+'...');
@@ -2146,7 +2191,22 @@ async function scanGoogleDrive(token) {
     if (allFiles.length===0) { showToast('⚠ No se encontraron archivos de música'); return; }
     showToast('⏳ '+allFiles.length+' canciones encontradas — guardando...');
 
-    await _supabase.from('songs').delete().eq('user_id',currentUser.id).eq('cloud_provider','gdrive');
+    // Build a set of file IDs from this scan to avoid duplicate deletion of other accounts
+    const newFileIds = allFiles.map(f => 'gdrive:'+f.id);
+
+    // Only delete songs from THIS account's files (by file_path match), not all gdrive songs
+    // We delete in batches using the file paths found in this scan
+    // This preserves songs from other connected gdrive accounts
+    if (newFileIds.length > 0) {
+      const DBATCH = 200;
+      for (let i = 0; i < newFileIds.length; i += DBATCH) {
+        const slice = newFileIds.slice(i, i + DBATCH);
+        await _supabase.from('songs').delete()
+          .eq('user_id', currentUser.id)
+          .eq('cloud_provider', 'gdrive')
+          .in('file_path', slice);
+      }
+    }
 
     let guardadas=0;
     const BATCH=100;
@@ -2154,11 +2214,25 @@ async function scanGoogleDrive(token) {
       const lote = allFiles.slice(i,i+BATCH);
       const rows = lote.map(file => {
         const nombre  = file.name.replace(/\.(mp3|flac|wav|ogg|m4a|mp4)$/i,'');
+        // Try to parse: "Artist - Album - Title" or "Artist - Title" or just "Title"
         const partes  = nombre.split(' - ');
-        const artista = partes.length>1 ? partes[0].trim() : 'Desconocido';
-        const titulo  = partes.length>1 ? partes.slice(1).join(' - ').trim() : nombre;
-        return { user_id:currentUser.id, title:titulo, artist:artista, album:'Google Drive', duration:0,
-          file_path:'gdrive:'+file.id, file_url:'https://www.googleapis.com/drive/v3/files/'+file.id+'?alt=media', cloud_provider:'gdrive' };
+        let artista, titulo, album;
+        if (partes.length >= 3) {
+          artista = partes[0].trim();
+          album   = partes[1].trim();
+          titulo  = partes.slice(2).join(' - ').trim();
+        } else if (partes.length === 2) {
+          artista = partes[0].trim();
+          titulo  = partes[1].trim();
+          album   = 'Sin álbum';
+        } else {
+          artista = 'Desconocido';
+          titulo  = nombre;
+          album   = 'Sin álbum';
+        }
+        return { user_id:currentUser.id, title:titulo, artist:artista, album:album, duration:0,
+          file_path:'gdrive:'+file.id, file_url:'https://www.googleapis.com/drive/v3/files/'+file.id+'?alt=media',
+          cloud_provider:'gdrive', account_email: accountEmail };
       });
       const { error } = await _supabase.from('songs').insert(rows);
       if (error) console.error('Lote '+i+':',error.message); else guardadas+=lote.length;
