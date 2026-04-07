@@ -1342,12 +1342,18 @@ async function initApp(){
 async function loadClouds(){
   connectedClouds={};
   const{data}=await _supabase.from('cloud_connections')
-    .select('id,provider,access_token,token_expires_at,connected_at')
+    .select('id,provider,account_key,access_token,token_expires_at,connected_at')
     .eq('user_id',currentUser.id);
   if(data){
     data.forEach(r=>{
       const expired=r.token_expires_at&&new Date(r.token_expires_at)<new Date();
-      if(!expired){ connectedClouds[r.provider]=true; connectedClouds['_tok_'+r.provider]=r.access_token; }
+      if(!expired){
+        connectedClouds[r.provider]=true;
+        // Store token per account_key so multiple accounts work
+        connectedClouds['_tok_'+(r.account_key||r.provider)]=r.access_token;
+        // Also store by provider for fallback
+        connectedClouds['_tok_'+r.provider]=r.access_token;
+      }
     });
     connectedClouds._accounts=data.map(r=>({
       ...r, expired:!!(r.token_expires_at&&new Date(r.token_expires_at)<new Date())
@@ -1565,18 +1571,24 @@ function renderAccounts(){
     el.innerHTML='<div style="padding:40px;text-align:center;color:var(--text3)">No hay cuentas de Google Drive.<br><br><button class="btn-primary" style="width:auto;padding:10px 22px" onclick="startConnect(\'gdrive\')">Conectar Google Drive</button></div>';
     return;
   }
-  const cnt=songs.filter(s=>s.cloud==='gdrive').length;
-  el.innerHTML=accs.map(acc=>
-    '<div class="account-card">'
-    +'<div class="account-icon" style="background:#4285F422">🔵</div>'
-    +'<div class="account-info"><div class="account-name">Google Drive</div>'
-    +'<div class="account-sub">'+(acc.expired?'⚠ Token expirado — reconecta':cnt+' canciones · Activo')+'</div></div>'
-    +'<div style="width:8px;height:8px;border-radius:50%;background:'+(acc.expired?'var(--red)':'var(--green)')+'"></div>'
-    +(acc.expired
-      ?'<button class="btn-connect" style="margin-left:12px;width:auto;padding:8px 14px;font-size:0.75rem" onclick="startConnect(\'gdrive\')">Reconectar</button>'
-      :'<button class="btn-sync" style="margin-left:12px;width:auto;padding:8px 14px;font-size:0.75rem" onclick="syncCloud(\'gdrive\')">↻ Sync</button>')
-    +'</div>'
-  ).join('')
+  el.innerHTML=accs.map(acc=>{
+    const key=acc.account_key||acc.provider;
+    const label=acc.account_label||key;
+    const cnt=songs.filter(s=>s.account_key===key).length;
+    return '<div class="account-card">'
+      +'<div class="account-icon" style="background:#4285F422">🔵</div>'
+      +'<div class="account-info">'
+      +'<div class="account-name">Google Drive</div>'
+      +'<div class="account-sub" style="color:var(--accent2);font-size:0.78rem">'+label+'</div>'
+      +'<div class="account-sub">'+(acc.expired?'⚠ Token expirado':cnt+' canciones · Activo')+'</div>'
+      +'</div>'
+      +'<div style="width:8px;height:8px;border-radius:50%;flex-shrink:0;background:'+(acc.expired?'var(--red)':'var(--green)')+'"></div>'
+      +(acc.expired
+        ?'<button class="btn-connect" style="margin-left:12px;width:auto;padding:8px 14px;font-size:0.75rem" onclick="startConnect(\'gdrive\')">Reconectar</button>'
+        :'<button class="btn-sync" style="margin-left:12px;width:auto;padding:8px 14px;font-size:0.75rem" onclick="syncCloud(\'gdrive\',\''+key+'\')">↻ Sync</button>'
+        +'<button class="btn-disconnect" style="margin-left:6px;width:auto;padding:8px 14px;font-size:0.75rem" onclick="disconnectCloud(\'gdrive\',\''+key+'\')">✕</button>')
+      +'</div>';
+  }).join('')
   +'<div style="margin-top:16px"><button class="btn-connect" style="width:auto;padding:10px 20px" onclick="startConnect(\'gdrive\')">+ Agregar otra cuenta</button></div>';
 }
 function renderClouds(){
@@ -1953,15 +1965,38 @@ async function detectCloudCallback(){
 async function saveGDriveToken(accessToken, expiresIn){
   toast('⏳ Conectando Google Drive...');
   const exp=new Date(Date.now()+expiresIn*1000).toISOString();
+
+  // Get email from Google to use as account_key
+  let accountEmail='gdrive_'+Date.now();
+  try {
+    const r=await fetch('https://www.googleapis.com/oauth2/v2/userinfo',
+      {headers:{Authorization:'Bearer '+accessToken}});
+    const info=await r.json();
+    if(info.email) accountEmail=info.email;
+  } catch(e){ console.warn('Could not get email:', e); }
+
+  const accountKey='gdrive:'+accountEmail;
+
+  // Insert new row with account_key (allows multiple accounts)
   const{error}=await _supabase.from('cloud_connections').upsert({
-    user_id:currentUser.id, provider:'gdrive',
-    access_token:accessToken, token_expires_at:exp, connected_at:new Date().toISOString()
-  },{onConflict:'user_id,provider'});
+    user_id:currentUser.id,
+    provider:'gdrive',
+    account_key:accountKey,
+    account_label:accountEmail,
+    access_token:accessToken,
+    token_expires_at:exp,
+    connected_at:new Date().toISOString()
+  },{onConflict:'user_id,account_key'});
+
   if(error){toast('⚠ Error guardando conexión: '+error.message);console.error(error);return;}
-  connectedClouds['gdrive']=true; connectedClouds['_tok_gdrive']=accessToken;
-  toast('✓ Google Drive conectado — escaneando...');
-  // FIX 2: Don't delete old songs, append new ones
-  await scanGDrive(accessToken, false);
+
+  connectedClouds['gdrive']=true;
+  connectedClouds['_tok_gdrive']=accessToken;
+  connectedClouds['_tok_'+accountKey]=accessToken;
+
+  toast('✓ '+accountEmail+' conectada — escaneando...');
+  // Scan only this account's files, don't delete other accounts' songs
+  await scanGDrive(accessToken, accountKey, false);
   await loadClouds(); await loadSongsFromDB(); updateStats(); renderAll();
   showView('songs',document.querySelector('.nav-item[onclick*="songs"]'));
   toast('🎵 '+songs.length+' canciones en tu biblioteca');
@@ -1970,7 +2005,7 @@ async function saveGDriveToken(accessToken, expiresIn){
 // FIX 1: Extract album/cover from Drive file metadata using ID3 tags via MusicBrainz lookup
 // Since we can't read ID3 from Drive directly without downloading, we use the filename
 // and query MusicBrainz API to get cover art. This runs async after scan.
-async function scanGDrive(token, deleteFirst=true){
+async function scanGDrive(token, accountKey, deleteFirst=true){
   toast('⏳ Escaneando Google Drive...');
   try {
     let allFiles=[],pageToken=null,pagina=1;
@@ -1992,8 +2027,15 @@ async function scanGDrive(token, deleteFirst=true){
     if(!allFiles.length){toast('⚠ No se encontraron archivos de música');return;}
     toast('⏳ '+allFiles.length+' canciones — guardando...');
 
-    if(deleteFirst){
-      await _supabase.from('songs').delete().eq('user_id',currentUser.id).eq('cloud_provider','gdrive');
+    // Only delete songs from THIS specific account, not all gdrive songs
+    if(deleteFirst && accountKey){
+      await _supabase.from('songs').delete()
+        .eq('user_id',currentUser.id)
+        .eq('cloud_provider','gdrive')
+        .eq('account_key',accountKey);
+    } else if(deleteFirst){
+      await _supabase.from('songs').delete()
+        .eq('user_id',currentUser.id).eq('cloud_provider','gdrive');
     }
 
     let saved=0; const BATCH=100;
@@ -2002,20 +2044,19 @@ async function scanGDrive(token, deleteFirst=true){
       const rows=lote.map(file=>{
         const nombre=file.name.replace(/\.(mp3|flac|wav|ogg|m4a|mp4)$/i,'');
         const partes=nombre.split(' - ');
-        // FIX 5: parse Artist - Title - Album from filename if present
         const artista=partes.length>1?partes[0].trim():'Desconocido';
         const titulo=partes.length>1?partes.slice(1).join(' - ').trim():nombre;
-        // Try to extract album from 3-part filename: "Artist - Album - Title"
         let album='Sin álbum';
         if(partes.length>=3){ album=partes[1].trim(); }
         return {
           user_id:currentUser.id, title:titulo, artist:artista, album:album,
-          duration:0, file_path:'gdrive:'+file.id,
+          duration:0,
+          file_path:(accountKey||'gdrive')+':'+file.id,
           file_url:'https://www.googleapis.com/drive/v3/files/'+file.id+'?alt=media',
-          cloud_provider:'gdrive'
+          cloud_provider:'gdrive',
+          account_key: accountKey||'gdrive'
         };
       });
-      // Use upsert with ignoreDuplicates to allow appending new files
       const{error}=await _supabase.from('songs').upsert(rows,{onConflict:'user_id,file_path',ignoreDuplicates:true});
       if(error) console.error('Lote '+i+':',error.message); else saved+=lote.length;
       if(i%(BATCH*5)===0&&i>0) toast('⏳ '+saved+'/'+allFiles.length+'...');
@@ -2024,25 +2065,39 @@ async function scanGDrive(token, deleteFirst=true){
   } catch(err){ console.error('scanGDrive:',err); toast('Error: '+err.message); }
 }
 
-async function syncCloud(id){
+async function syncCloud(id, accountKey){
   if(id==='gdrive'){
-    const{data,error}=await _supabase.from('cloud_connections')
-      .select('access_token,token_expires_at').eq('user_id',currentUser.id).eq('provider','gdrive').single();
-    if(error||!data){toast('⚠ Reconecta Google Drive');return;}
-    if(data.token_expires_at&&new Date(data.token_expires_at)<new Date()){toast('⚠ Token expirado — reconecta');return;}
-    await scanGDrive(data.access_token,true);
+    let query=_supabase.from('cloud_connections')
+      .select('access_token,token_expires_at,account_key,account_label')
+      .eq('user_id',currentUser.id).eq('provider','gdrive');
+    if(accountKey) query=query.eq('account_key',accountKey);
+    const{data,error}=await query;
+    const rows=data||[];
+    if(error||!rows.length){toast('⚠ Reconecta Google Drive');return;}
+    for(const row of rows){
+      if(row.token_expires_at&&new Date(row.token_expires_at)<new Date()){
+        toast('⚠ Token expirado para '+(row.account_label||'cuenta')+' — reconecta'); continue;
+      }
+      await scanGDrive(row.access_token, row.account_key, true);
+    }
     await loadClouds(); await loadSongsFromDB(); updateStats(); renderAll();
     toast('✓ Sincronizado — '+songs.length+' canciones');
   } else { toast('Próximamente para '+id); }
 }
-async function disconnectCloud(id){
+async function disconnectCloud(id, accountKey){
   const c=CLOUD_SERVICES.find(x=>x.id===id);
-  if(!confirm('¿Desconectar '+c.name+'? Se eliminarán sus canciones.')) return;
-  await _supabase.from('cloud_connections').delete().eq('user_id',currentUser.id).eq('provider',id);
-  await _supabase.from('songs').delete().eq('user_id',currentUser.id).eq('cloud_provider',id);
-  delete connectedClouds[id]; delete connectedClouds['_tok_'+id];
+  const label=accountKey?accountKey.replace(id+':',''):c.name;
+  if(!confirm('¿Desconectar '+label+'?')) return;
+  // Delete only this specific account
+  let q=_supabase.from('cloud_connections').delete().eq('user_id',currentUser.id).eq('provider',id);
+  if(accountKey) q=q.eq('account_key',accountKey);
+  await q;
+  // Delete only this account's songs
+  let sq=_supabase.from('songs').delete().eq('user_id',currentUser.id).eq('cloud_provider',id);
+  if(accountKey) sq=sq.eq('account_key',accountKey);
+  await sq;
   await loadClouds(); await loadSongsFromDB(); updateStats(); renderAll();
-  toast('✓ '+c.name+' desconectado');
+  toast('✓ '+label+' desconectado');
 }
 
 function closeModal(){document.getElementById('oauthModal').classList.remove('show');pendingCloud=null;}
