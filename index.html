@@ -2044,18 +2044,35 @@ async function playSongById(id){
   }
   if(!token){ showTokenExpiredBanner('gdrive','Google Drive'); return; }
 
+  // Google Drive ya no acepta access_token como query param (responde 409).
+  // Solución: fetch con Authorization header → Blob URL → audioEl.src
+  toast('⏳ Cargando '+song.title+'...');
   try {
-    // STREAM directly via access_token query param — no full download needed, plays instantly
-    if(audioEl._blobUrl){ URL.revokeObjectURL(audioEl._blobUrl); audioEl._blobUrl=null; }
-    const streamUrl=song.fileUrl+'&access_token='+encodeURIComponent(token);
-    audioEl.src=streamUrl;
+    const res = await fetch(song.fileUrl, {
+      headers: { Authorization: 'Bearer ' + token }
+    });
+    if (!res.ok) {
+      if (res.status === 401 || res.status === 403) {
+        console.warn('Token inválido ('+res.status+'), intentando refresh...');
+        await autoRefreshToken(song.accountKey || 'gdrive', song.accountKey || 'Google Drive').catch(()=>{});
+        // Reintentar con token nuevo si se actualizó
+        const newTok = connectedClouds['_tok_'+(song.accountKey||'gdrive')];
+        if (newTok && newTok !== token) { setTimeout(()=>playSongById(song.id), 500); }
+        else { showTokenExpiredBanner(song.accountKey||'gdrive', song.accountKey||'Google Drive'); }
+        return;
+      }
+      throw new Error('HTTP ' + res.status);
+    }
+    const blob = await res.blob();
+    if (audioEl._blobUrl) { URL.revokeObjectURL(audioEl._blobUrl); audioEl._blobUrl = null; }
+    audioEl._blobUrl = URL.createObjectURL(blob);
+    audioEl.src = audioEl._blobUrl;
     audioEl.load();
     toast('▶ '+song.title+' — '+song.artist);
     try {
       await audioEl.play();
       isPlaying=true; updatePlayBtn(); syncNpModal();
     } catch(playErr){
-      // If autoplay blocked, user just needs to tap play — that's fine
       if(playErr.name==='NotAllowedError'){
         isPlaying=false; updatePlayBtn();
         toast('Toca ▶ para reproducir');
