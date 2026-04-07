@@ -1546,9 +1546,15 @@ async function checkSession(){
       window.close(); return;
     }
   }
-  _supabase.auth.onAuthStateChange((ev,sess)=>{ if(ev==='SIGNED_IN'&&sess?.user) loginSuccess(sess.user); });
+  // Use getSession first, then onAuthStateChange only for future changes — avoids lock contention
   const{data:{session}}=await _supabase.auth.getSession();
-  if(session?.user){ loginSuccess(session.user); if(hasHash) setTimeout(()=>detectCloudCallback(),600); }
+  if(session?.user){
+    loginSuccess(session.user);
+    if(hasHash) setTimeout(()=>detectCloudCallback(),600);
+  } else {
+    // Only subscribe to state changes if not already logged in
+    _supabase.auth.onAuthStateChange((ev,sess)=>{ if(ev==='SIGNED_IN'&&sess?.user) loginSuccess(sess.user); });
+  }
 }
 
 // ══ INIT ══
@@ -2033,7 +2039,12 @@ async function playSongById(id){
           }
         }
       } catch(e){}
-      if(!token) token=row.access_token;
+      // Fallback: raw token (legacy non-multiAccount row) — check expiry first
+      if(!token){
+        const rawExpired=row.token_expires_at&&new Date(row.token_expires_at)<new Date();
+        if(rawExpired){ showTokenExpiredBanner(song.accountKey||'gdrive', song.accountKey||'Google Drive'); return; }
+        token=row.access_token;
+      }
       if(token) connectedClouds['_tok_'+(song.accountKey||song.cloud||'gdrive')]=token;
     }
   }
@@ -2249,18 +2260,16 @@ function connectGDrivePopup(){
   if(!_oauthPopup){toast('⚠ Popup bloqueado. Permite popups e intenta de nuevo.');return;}
   toast('🔐 Autoriza en la ventana de Google...');
   window.addEventListener('message',_oauthMsg,{once:false});
-  _oauthInterval=setInterval(()=>{
-    if(_oauthPopup&&_oauthPopup.closed){
-      clearInterval(_oauthInterval); window.removeEventListener('message',_oauthMsg);
-      toast('ℹ Ventana cerrada sin conectar');
-    }
-  },800);
+  // COOP fix: do NOT poll _oauthPopup.closed — Google blocks cross-origin window access.
+  // Auto-cleanup listener after 10 min as fallback.
+  _oauthInterval=setTimeout(()=>{ window.removeEventListener('message',_oauthMsg); _oauthPopup=null; }, 600000);
 }
 async function _oauthMsg(ev){
   if(ev.origin!==window.location.origin) return;
   const msg=ev.data; if(!msg||msg.type!=='gdrive_token') return;
-  window.removeEventListener('message',_oauthMsg); clearInterval(_oauthInterval);
-  if(_oauthPopup&&!_oauthPopup.closed) _oauthPopup.close();
+  clearTimeout(_oauthInterval); window.removeEventListener('message',_oauthMsg);
+  // Safely try to close popup — wrapped in try/catch for COOP
+  try{ if(_oauthPopup) _oauthPopup.close(); }catch(e){}
   const saved=sessionStorage.getItem('gdrive_oauth_nonce');
   sessionStorage.removeItem('gdrive_oauth_nonce');
   if(msg.nonce!==saved){toast('⚠ Error de seguridad');return;}
