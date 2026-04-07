@@ -1342,7 +1342,7 @@ async function initApp(){
 async function loadClouds(){
   connectedClouds={};
   const{data}=await _supabase.from('cloud_connections')
-    .select('id,provider,account_key,account_label,access_token,token_expires_at,connected_at')
+    .select('id,provider,account_key,access_token,token_expires_at,connected_at')
     .eq('user_id',currentUser.id);
   if(data){
     data.forEach(r=>{
