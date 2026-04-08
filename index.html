@@ -793,6 +793,191 @@
   .account-name { font-size:0.9rem;font-weight:600;margin-bottom:3px; }
   .account-sub { font-size:0.75rem;color:var(--text3); }
 
+  /* ══════════════════════════════════════
+     MOBILE RESPONSIVE — BOTTOM NAV
+  ══════════════════════════════════════ */
+
+  /* Hamburger / top-bar (mobile only) */
+  .mobile-topbar {
+    display: none;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 18px;
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    z-index: 50;
+  }
+  .mobile-topbar-logo {
+    display: flex; align-items: center; gap: 8px;
+  }
+  .mobile-topbar-logo img { width:28px;height:28px;border-radius:50%;object-fit:cover; }
+  .mobile-topbar-logo span {
+    font-family:'Nunito',sans-serif;font-size:1.1rem;font-weight:900;color:#ee9c36;
+  }
+  .mobile-menu-btn {
+    background:none;border:none;color:var(--text2);cursor:pointer;
+    padding:6px;border-radius:8px;display:flex;align-items:center;justify-content:center;
+    transition:color .15s;
+  }
+  .mobile-menu-btn:hover { color:var(--text); }
+
+  /* Sidebar overlay for mobile */
+  .sidebar-overlay {
+    display:none;
+    position:fixed;inset:0;z-index:199;
+    background:rgba(0,0,0,0.55);
+    backdrop-filter:blur(3px);
+    opacity:0;
+    transition:opacity .25s;
+  }
+  .sidebar-overlay.visible { opacity:1; }
+
+  /* Bottom navigation bar */
+  .mobile-bottom-nav {
+    display: none;
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    height: 60px;
+    background: var(--bg2);
+    border-top: 1px solid var(--border);
+    z-index: 100;
+    padding: 0 4px;
+    align-items: center;
+    justify-content: space-around;
+  }
+  .mobile-nav-btn {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 3px; flex: 1; height: 100%;
+    background: none; border: none; color: var(--text3);
+    cursor: pointer; font-size: 0.56rem; letter-spacing: 0.3px;
+    transition: color .15s; padding: 8px 2px 6px;
+    text-transform: uppercase;
+  }
+  .mobile-nav-btn svg { flex-shrink:0; }
+  .mobile-nav-btn.active { color: var(--accent2); }
+  .mobile-nav-btn.active svg { filter: drop-shadow(0 0 4px rgba(167,139,250,0.5)); }
+
+  /* Mobile player bar compact */
+  @media (max-width: 768px) {
+    /* Show mobile elements */
+    .mobile-topbar { display: flex; }
+    .mobile-bottom-nav { display: flex; }
+
+    /* Hide desktop sidebar */
+    .sidebar {
+      position: fixed;
+      left: -260px;
+      top: 0; bottom: 0;
+      z-index: 200;
+      width: 260px;
+      transition: left .28s cubic-bezier(.4,0,.2,1);
+      border-right: 1px solid var(--border);
+      box-shadow: 4px 0 30px rgba(0,0,0,.5);
+    }
+    .sidebar.mobile-open { left: 0; }
+    .sidebar-overlay { display: block; }
+
+    /* App body fills viewport */
+    #appScreen { height: 100vh; overflow: hidden; }
+    .app-body {
+      height: calc(100vh - 49px - var(--player-h) - 60px);
+    }
+
+    /* Main content adjustments */
+    .main { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+    .view { padding: 16px; }
+    .view-header {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+    .view-header > div:last-child { width: 100%; }
+    .search-bar { width: 100%; }
+
+    /* Stats row: 2 cols on mobile */
+    .stats-row { grid-template-columns: 1fr 1fr; gap: 10px; }
+    .stat-card { padding: 14px; }
+    .stat-value { font-size: 1.4rem; }
+
+    /* Albums grid smaller */
+    .albums-grid { grid-template-columns: repeat(auto-fill,minmax(130px,1fr)); gap: 11px; }
+
+    /* Songs list — hide artist/album columns, keep title & dur */
+    .songs-list-header {
+      grid-template-columns: 32px 1fr 54px 28px;
+    }
+    .songs-list-header span:nth-child(3),
+    .songs-list-header span:nth-child(4) { display: none; }
+    .song-row {
+      grid-template-columns: 32px 1fr 54px 28px;
+    }
+    .song-artist-cell, .song-album-cell { display: none; }
+
+    /* Player bar slim on mobile */
+    .player-bar {
+      padding: 0 14px;
+      gap: 10px;
+      height: var(--player-h);
+    }
+    .now-playing { width: auto; flex: 1; min-width: 0; }
+    .np-info { min-width: 0; flex: 1; }
+    .np-title { font-size: 0.78rem; }
+    .np-artist { font-size: 0.68rem; }
+    /* Hide volume on mobile */
+    .vol-area { display: none; }
+    /* Compact controls */
+    .player-controls { flex: 0; }
+    .progress-row { display: none; }
+    .ctrl-btns { gap: 2px; }
+    .ctrl-btn { padding: 5px; }
+    /* Hide shuffle & repeat in compact bar */
+    .ctrl-btns > button:first-child,
+    .ctrl-btns > button:last-child { display: none; }
+
+    /* Playlists grid */
+    .playlists-grid { grid-template-columns: repeat(auto-fill,minmax(155px,1fr)); gap: 10px; }
+
+    /* Clouds grid */
+    .clouds-grid { grid-template-columns: 1fr; }
+
+    /* Song grid cards smaller */
+    .songs-grid-wrap { grid-template-columns: repeat(auto-fill,minmax(130px,1fr)); gap: 10px; padding: 0 0 16px; }
+
+    /* NP modal — full screen */
+    .np-modal-cover { flex: 0 0 42vh; max-height: 340px; }
+    .np-modal-body { padding: 18px 20px 14px; }
+
+    /* oauth modal */
+    .oauth-box { width: calc(100vw - 40px); padding: 26px 20px; }
+
+    /* toast position above bottom nav */
+    .toast { bottom: 74px; }
+
+    /* Add to playlist modal fix */
+    .atp-modal-box { width: calc(100vw - 32px) !important; max-height: 80vh !important; }
+
+    /* View header title smaller */
+    .view-title { font-size: 1.25rem; }
+
+    /* Songs search row */
+    #view-songs .view-header > div:last-child {
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    /* Add bottom padding to main so content isn't hidden behind bottom nav */
+    .main { padding-bottom: 8px; }
+  }
+
+  /* Extra small phones */
+  @media (max-width: 380px) {
+    .albums-grid { grid-template-columns: repeat(2,1fr); }
+    .stats-row { grid-template-columns: 1fr 1fr; }
+    .view { padding: 12px; }
+  }
+
 </style>
 </head>
 <body>
@@ -931,6 +1116,23 @@
      APP SCREEN
 ══════════════════════════════════════ -->
 <div id="appScreen" class="screen">
+
+  <!-- MOBILE TOP BAR (visible solo en móvil) -->
+  <div class="mobile-topbar" id="mobileTopbar">
+    <div class="mobile-topbar-logo">
+      <img id="mobileTopbarLogo" src="" alt="Sonata">
+      <span>Sonata</span>
+    </div>
+    <button class="mobile-menu-btn" onclick="toggleMobileSidebar()" aria-label="Menú">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+      </svg>
+    </button>
+  </div>
+
+  <!-- SIDEBAR OVERLAY (tap to close) -->
+  <div class="sidebar-overlay" id="sidebarOverlay" onclick="closeMobileSidebar()"></div>
+
   <div class="app-body">
 
     <!-- SIDEBAR -->
@@ -1173,7 +1375,32 @@
       </div>
     </div>
   </div>
-</div>
+
+  <!-- MOBILE BOTTOM NAV -->
+  <nav class="mobile-bottom-nav" id="mobileBottomNav">
+    <button class="mobile-nav-btn active" id="mbnHome" onclick="mobileNav('home',this)">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+      Inicio
+    </button>
+    <button class="mobile-nav-btn" id="mbnSongs" onclick="mobileNav('songs',this)">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+      Canciones
+    </button>
+    <button class="mobile-nav-btn" id="mbnAlbums" onclick="mobileNav('albums',this)">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>
+      Álbumes
+    </button>
+    <button class="mobile-nav-btn" id="mbnLiked" onclick="mobileNav('liked',this)">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+      Gustos
+    </button>
+    <button class="mobile-nav-btn" id="mbnClouds" onclick="mobileNav('clouds',this)">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 10h-1.26A8 8 0 109 20h9a5 5 0 000-10z"/></svg>
+      Nubes
+    </button>
+  </nav>
+
+</div><!-- end appScreen -->
 
 <!-- MODAL -->
 <div class="oauth-modal" id="oauthModal">
@@ -1309,19 +1536,34 @@ async function logout(){
   document.getElementById('welcomeScreen').classList.add('active');
 }
 async function checkSession(){
-  const hasHash=window.location.hash.includes('access_token');
-  if(hasHash&&window.opener&&!window.opener.closed){
-    const p=new URLSearchParams(window.location.hash.replace('#',''));
-    const token=p.get('access_token'), exp=parseInt(p.get('expires_in')||'3600');
+  const hash=window.location.hash;
+  const hasHash=hash.includes('access_token');
+  const hasError=hash.includes('error=');
+  // Handle OAuth popup callback — success OR silent-refresh error
+  if((hasHash||hasError)&&window.opener&&!window.opener.closed){
+    const p=new URLSearchParams(hash.replace('#',''));
     let state={}; try{state=JSON.parse(decodeURIComponent(p.get('state')||'{}'));}catch{}
-    if(token&&state.provider==='gdrive'){
-      window.opener.postMessage({type:'gdrive_token',token,expiresIn:exp,nonce:state.nonce},window.location.origin);
+    if(hasHash){
+      const token=p.get('access_token'),exp=parseInt(p.get('expires_in')||'3600');
+      if(token&&state.provider==='gdrive'){
+        window.opener.postMessage({type:'gdrive_token',token,expiresIn:exp,nonce:state.nonce},window.location.origin);
+        window.close(); return;
+      }
+    } else if(hasError&&state.silent){
+      // Silent refresh failed (interaction_required, etc.) — tell parent
+      window.opener.postMessage({type:'gdrive_token_error',error:p.get('error'),nonce:state.nonce},window.location.origin);
       window.close(); return;
     }
   }
-  _supabase.auth.onAuthStateChange((ev,sess)=>{ if(ev==='SIGNED_IN'&&sess?.user) loginSuccess(sess.user); });
+  // Use getSession first, then onAuthStateChange only for future changes — avoids lock contention
   const{data:{session}}=await _supabase.auth.getSession();
-  if(session?.user){ loginSuccess(session.user); if(hasHash) setTimeout(()=>detectCloudCallback(),600); }
+  if(session?.user){
+    loginSuccess(session.user);
+    if(hasHash) setTimeout(()=>detectCloudCallback(),600);
+  } else {
+    // Only subscribe to state changes if not already logged in
+    _supabase.auth.onAuthStateChange((ev,sess)=>{ if(ev==='SIGNED_IN'&&sess?.user) loginSuccess(sess.user); });
+  }
 }
 
 // ══ INIT ══
@@ -1355,7 +1597,11 @@ async function loadClouds(){
           const expired=acc.expires&&new Date(acc.expires)<new Date();
           accountsList.push({id:r.id,provider:r.provider,account_key:acc.key,account_label:acc.label,
             access_token:acc.token,token_expires_at:acc.expires,connected_at:r.connected_at,expired:!!expired});
-          if(!expired){anyActive=true;connectedClouds['_tok_'+acc.key]=acc.token;connectedClouds['_tok_'+r.provider]=acc.token;}
+          if(!expired){anyActive=true;connectedClouds['_tok_'+acc.key]=acc.token;connectedClouds['_tok_'+r.provider]=acc.token;
+            if(acc.expires) scheduleTokenRefresh(acc.key,acc.label||acc.key,acc.expires);
+          }
+          // NOTE: do NOT schedule silent refresh for already-expired tokens —
+          // Google blocks iframe OAuth (COOP policy). Banner shows when user tries to play.
         });
         if(anyActive)connectedClouds[r.provider]=true;
       } else {
@@ -1731,6 +1977,10 @@ document.addEventListener('DOMContentLoaded',function(){
 
 // ══ PLAYER ══
 const audioEl=new Audio();
+audioEl.volume=volume;
+document.addEventListener('DOMContentLoaded',function(){
+  const vf=document.getElementById('volFill'); if(vf) vf.style.width=(volume*100)+'%';
+});
 audioEl.addEventListener('ended',()=>nextSong());
 audioEl.addEventListener('timeupdate',()=>{
   if(!audioEl.duration) return;
@@ -1738,11 +1988,21 @@ audioEl.addEventListener('timeupdate',()=>{
   songDuration=Math.floor(audioEl.duration);
   updateProgressUI(); syncNpProgress();
 });
-// FIX 6: handle play errors gracefully
+// FIX 6: handle play errors — detect 401/token expiry and show reconnect banner
 audioEl.addEventListener('error',(e)=>{
-  console.error('Audio error:',e);
-  toast('Error al reproducir. Intenta de nuevo.');
-  isPlaying=false; updatePlayBtn();
+  const err=audioEl.error;
+  // MediaError code 4 = MEDIA_ERR_SRC_NOT_SUPPORTED — often a 401 from Drive
+  if(err&&err.code===4&&currentSongIdx!==-1){
+    const song=songs[currentSongIdx];
+    console.warn('Audio error code 4 (likely token expired) for',song.accountKey);
+    isPlaying=false; updatePlayBtn();
+    autoRefreshToken(song.accountKey||'gdrive', song.accountKey||'Google Drive')
+      .then(ok=>{ if(ok) playSongById(song.id); });
+  } else {
+    console.error('Audio error:',e);
+    toast('Error al reproducir. Intenta de nuevo.');
+    isPlaying=false; updatePlayBtn();
+  }
 });
 
 async function playSongById(id){
@@ -1761,13 +2021,13 @@ async function playSongById(id){
   syncNpModal();
   renderHomeSongs(); renderAllSongs();
 
-  if(!song.fileUrl){ // Demo mode
-    audioEl.src=''; isPlaying=true; updatePlayBtn();
-    progress=0; songDuration=parseDur(song.duration); startProg();
-    toast('▶ '+song.title+' — '+song.artist); return;
+  if(!song.fileUrl){
+    audioEl.src=''; isPlaying=false; updatePlayBtn();
+    progress=0; songDuration=0; updateProgressUI(); syncNpProgress();
+    toast('⚠ Sin URL de audio — reconecta Google Drive'); return;
   }
 
-  // FIX 6: Get token properly — try accountKey first, then provider fallback
+  // FIX 6: Get token — try accountKey first, then provider fallback, then parse multi-account JSON
   let token=connectedClouds['_tok_'+(song.accountKey||'')]
     ||connectedClouds['_tok_'+(song.cloud||'gdrive')];
   if(!token){
@@ -1776,40 +2036,72 @@ async function playSongById(id){
       .eq('provider',song.cloud||'gdrive').limit(1);
     const row=Array.isArray(cd)?cd[0]:cd;
     if(row?.access_token){
-      token=row.access_token;
-      connectedClouds['_tok_'+(song.cloud||'gdrive')]=token;
+      // Try to extract token from multi-account JSON
+      try {
+        const p=JSON.parse(row.access_token);
+        if(p&&p._multiAccount&&Array.isArray(p.accounts)){
+          const acc=song.accountKey
+            ?p.accounts.find(a=>a.key===song.accountKey)
+            :p.accounts[p.accounts.length-1];
+          if(acc){
+            // Check if this specific account token is expired
+            if(acc.expires&&new Date(acc.expires)<new Date()){
+              showTokenExpiredBanner(acc.key||'gdrive', acc.label||acc.key);
+              return;
+            }
+            token=acc.token;
+          }
+        }
+      } catch(e){}
+      // Fallback: raw token (legacy non-multiAccount row) — check expiry first
+      if(!token){
+        const rawExpired=row.token_expires_at&&new Date(row.token_expires_at)<new Date();
+        if(rawExpired){ showTokenExpiredBanner(song.accountKey||'gdrive', song.accountKey||'Google Drive'); return; }
+        token=row.access_token;
+      }
+      if(token) connectedClouds['_tok_'+(song.accountKey||song.cloud||'gdrive')]=token;
     }
   }
-  if(!token){ toast('⚠ Reconecta Google Drive para reproducir'); return; }
+  if(!token){ showTokenExpiredBanner('gdrive','Google Drive'); return; }
 
+  // Google Drive ya no acepta access_token como query param (responde 409).
+  // Solución: fetch con Authorization header → Blob URL → audioEl.src
+  toast('⏳ Cargando '+song.title+'...');
   try {
-    toast('⏳ Cargando '+song.title+'...');
-    const res=await fetch(song.fileUrl,{headers:{Authorization:'Bearer '+token}});
-    if(!res.ok){ toast('⚠ Error '+res.status+' — reconecta Google Drive'); return; }
-    const blob=await res.blob();
-    // FIX 6: revoke previous blob URL to avoid memory leak and player stale src
-    if(audioEl._blobUrl){ URL.revokeObjectURL(audioEl._blobUrl); audioEl._blobUrl=null; }
-    const blobUrl=URL.createObjectURL(blob);
-    audioEl._blobUrl=blobUrl;
-    audioEl.src=blobUrl;
-    // Wait for audio to be ready before playing
-    await new Promise((resolve, reject) => {
-      const onCanPlay = () => { audioEl.removeEventListener('canplay', onCanPlay); audioEl.removeEventListener('error', onError); resolve(); };
-      const onError = (e) => { audioEl.removeEventListener('canplay', onCanPlay); audioEl.removeEventListener('error', onError); reject(e); };
-      audioEl.addEventListener('canplay', onCanPlay, {once:true});
-      audioEl.addEventListener('error', onError, {once:true});
-      audioEl.load();
+    const res = await fetch(song.fileUrl, {
+      headers: { Authorization: 'Bearer ' + token }
     });
+    if (!res.ok) {
+      if (res.status === 401 || res.status === 403) {
+        console.warn('Token inválido ('+res.status+') para', song.accountKey||'gdrive');
+        // Try silent refresh and retry playback automatically
+        const refreshed=await autoRefreshToken(song.accountKey||'gdrive', song.accountKey||'Google Drive');
+        if(refreshed){ playSongById(id); return; }
+        isPlaying=false; updatePlayBtn();
+        return;
+      }
+      throw new Error('HTTP ' + res.status);
+    }
+    const blob = await res.blob();
+    if (audioEl._blobUrl) { URL.revokeObjectURL(audioEl._blobUrl); audioEl._blobUrl = null; }
+    audioEl._blobUrl = URL.createObjectURL(blob);
+    audioEl.src = audioEl._blobUrl;
+    audioEl.load();
+    toast('▶ '+song.title+' — '+song.artist);
     try {
       await audioEl.play();
       isPlaying=true; updatePlayBtn(); syncNpModal();
-      toast('▶ '+song.title+' — '+song.artist);
     } catch(playErr){
-      console.error('play() failed:',playErr);
-      toast('Error al reproducir: '+playErr.message);
+      if(playErr.name==='NotAllowedError'){
+        isPlaying=false; updatePlayBtn();
+        toast('Toca ▶ para reproducir');
+      } else {
+        console.error('play() failed:',playErr);
+        toast('Error al reproducir: '+playErr.message);
+      }
     }
   } catch(fetchErr){
-    console.error('fetch failed:',fetchErr);
+    console.error('stream failed:',fetchErr);
     toast('Error de red: '+fetchErr.message);
   }
 }
@@ -1913,6 +2205,116 @@ function toggleMute(){
   const vf=document.getElementById('volFill'); if(vf) vf.style.width=isMuted?'0%':(volume*100)+'%';
 }
 
+// ══ TOKEN AUTO-REFRESH (SILENT POPUP) ══
+let _tokenRefreshTimers={};
+let _silentRefreshInProgress={};
+
+// ── 1. Open a tiny invisible popup with prompt=none to silently get a new token ──
+function silentRefreshGDrive(accountKey){
+  return new Promise(resolve=>{
+    if(_silentRefreshInProgress[accountKey]){resolve(null);return;}
+    _silentRefreshInProgress[accountKey]=true;
+    const loginHint=accountKey.replace(/^gdrive:/,'');
+    const nonce=Math.random().toString(36).slice(2);
+    const scope='https://www.googleapis.com/auth/drive.readonly email profile';
+    const url='https://accounts.google.com/o/oauth2/v2/auth'
+      +'?client_id='+encodeURIComponent(GOOGLE_CLIENT_ID)
+      +'&redirect_uri='+encodeURIComponent(GOOGLE_REDIRECT)
+      +'&response_type=token'
+      +'&scope='+encodeURIComponent(scope)
+      +'&state='+encodeURIComponent(JSON.stringify({nonce,provider:'gdrive',silent:true}))
+      +'&prompt=none'
+      +'&login_hint='+encodeURIComponent(loginHint);
+    // Tiny off-screen popup — user never sees it
+    const popup=window.open(url,'SonataSilentRefresh','width=1,height=1,left=-3000,top=-3000,toolbar=no,menubar=no,status=no');
+    function cleanup(result){
+      clearTimeout(timer);
+      window.removeEventListener('message',handler);
+      try{if(popup&&!popup.closed)popup.close();}catch(e){}
+      delete _silentRefreshInProgress[accountKey];
+      resolve(result);
+    }
+    const timer=setTimeout(()=>cleanup(null),15000);
+    function handler(ev){
+      if(ev.origin!==window.location.origin)return;
+      const msg=ev.data; if(!msg)return;
+      if(msg.type==='gdrive_token'&&msg.nonce===nonce) cleanup(msg);
+      else if(msg.type==='gdrive_token_error'&&msg.nonce===nonce) cleanup(null);
+    }
+    window.addEventListener('message',handler);
+    if(!popup){delete _silentRefreshInProgress[accountKey];resolve(null);}
+  });
+}
+
+// ── 2. Update token in memory + Supabase WITHOUT rescanning Drive ──
+async function updateGDriveTokenOnly(accountKey,newToken,expiresIn){
+  const exp=new Date(Date.now()+expiresIn*1000).toISOString();
+  connectedClouds['_tok_'+accountKey]=newToken;
+  connectedClouds['_tok_gdrive']=newToken;
+  try{
+    const{data:existing}=await _supabase.from('cloud_connections')
+      .select('*').eq('user_id',currentUser.id).eq('provider','gdrive').limit(1);
+    const row=existing&&existing[0]; if(!row)return false;
+    let accounts=[];
+    try{const p=JSON.parse(row.access_token);if(p&&p._multiAccount&&Array.isArray(p.accounts))accounts=p.accounts;}catch(e){}
+    const idx=accounts.findIndex(a=>a.key===accountKey);
+    if(idx!==-1){accounts[idx].token=newToken;accounts[idx].expires=exp;}
+    else accounts.push({key:accountKey,label:accountKey.replace(/^gdrive:/,''),token:newToken,expires:exp});
+    const last=accounts[accounts.length-1];
+    await _supabase.from('cloud_connections').update({
+      access_token:JSON.stringify({_multiAccount:true,accounts}),
+      token_expires_at:last.expires,account_key:last.key,account_label:last.label
+    }).eq('id',row.id);
+    scheduleTokenRefresh(accountKey,accountKey.replace(/^gdrive:/,''),exp);
+    console.log('✅ Token silently refreshed for',accountKey);
+    return true;
+  }catch(e){console.error('updateGDriveTokenOnly:',e);return false;}
+}
+
+// ── 3. Try silent refresh → update token silently; fallback to banner only if Google requires interaction ──
+async function autoRefreshToken(accountKey,label){
+  console.log('🔄 Silent refresh attempt for',label||accountKey);
+  const result=await silentRefreshGDrive(accountKey);
+  if(result&&result.token){
+    await updateGDriveTokenOnly(accountKey,result.token,result.expiresIn||3600);
+    const eb=document.getElementById('tokenExpiredBanner'); if(eb)eb.remove();
+    return true;
+  }
+  // Silent refresh not possible (interaction required) — show banner as last resort
+  console.warn('❌ Silent refresh failed for',label||accountKey,'— showing banner');
+  showTokenExpiredBanner(accountKey,label);
+  return false;
+}
+
+function showTokenExpiredBanner(accountKey,label){
+  const old=document.getElementById('tokenExpiredBanner'); if(old) old.remove();
+  const banner=document.createElement('div');
+  banner.id='tokenExpiredBanner';
+  banner.style.cssText='position:fixed;top:0;left:0;right:0;z-index:9999;background:linear-gradient(90deg,#7c3aed,#dc2626);color:white;padding:11px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:0.82rem;font-family:\'DM Sans\',sans-serif;box-shadow:0 4px 20px rgba(0,0,0,0.5)';
+  banner.innerHTML='<span>🔑 Sesión de <strong>'+(label||accountKey)+'</strong> cerrada — toca para reconectar</span>'
+    +'<div style="display:flex;gap:8px;flex-shrink:0">'
+    +'<button onclick="startConnect(\'gdrive\');document.getElementById(\'tokenExpiredBanner\').remove()" style="background:white;color:#7c3aed;border:none;border-radius:8px;padding:6px 14px;font-weight:700;font-size:0.8rem;cursor:pointer">Reconectar</button>'
+    +'<button onclick="this.parentElement.parentElement.remove()" style="background:rgba(255,255,255,0.2);color:white;border:none;border-radius:8px;padding:6px 10px;font-size:0.8rem;cursor:pointer">✕</button>'
+    +'</div>';
+  document.body.prepend(banner);
+}
+
+// ── 4. Schedule proactive silent refresh 5 min before expiry ──
+function scheduleTokenRefresh(accountKey,label,expiresAt){
+  if(_tokenRefreshTimers[accountKey]) clearTimeout(_tokenRefreshTimers[accountKey]);
+  const msUntilExpiry=new Date(expiresAt).getTime()-Date.now();
+  if(msUntilExpiry<=0){
+    setTimeout(()=>autoRefreshToken(accountKey,label),500);
+    return;
+  }
+  const msUntilRefresh=Math.max(msUntilExpiry-5*60*1000,0);
+  console.log('⏱ Token for',label||accountKey,'expires in',Math.round(msUntilExpiry/60000),'min — silent refresh in',Math.round(msUntilRefresh/60000),'min');
+  _tokenRefreshTimers[accountKey]=setTimeout(()=>{
+    delete _tokenRefreshTimers[accountKey];
+    autoRefreshToken(accountKey,label);
+  },Math.min(msUntilRefresh,2147483647));
+}
+
 // ══ CLOUDS ══
 function startConnect(id){
   pendingCloud=id; const c=CLOUD_SERVICES.find(x=>x.id===id);
@@ -1938,18 +2340,16 @@ function connectGDrivePopup(){
   if(!_oauthPopup){toast('⚠ Popup bloqueado. Permite popups e intenta de nuevo.');return;}
   toast('🔐 Autoriza en la ventana de Google...');
   window.addEventListener('message',_oauthMsg,{once:false});
-  _oauthInterval=setInterval(()=>{
-    if(_oauthPopup&&_oauthPopup.closed){
-      clearInterval(_oauthInterval); window.removeEventListener('message',_oauthMsg);
-      toast('ℹ Ventana cerrada sin conectar');
-    }
-  },800);
+  // COOP fix: do NOT poll _oauthPopup.closed — Google blocks cross-origin window access.
+  // Auto-cleanup listener after 10 min as fallback.
+  _oauthInterval=setTimeout(()=>{ window.removeEventListener('message',_oauthMsg); _oauthPopup=null; }, 600000);
 }
 async function _oauthMsg(ev){
   if(ev.origin!==window.location.origin) return;
   const msg=ev.data; if(!msg||msg.type!=='gdrive_token') return;
-  window.removeEventListener('message',_oauthMsg); clearInterval(_oauthInterval);
-  if(_oauthPopup&&!_oauthPopup.closed) _oauthPopup.close();
+  clearTimeout(_oauthInterval); window.removeEventListener('message',_oauthMsg);
+  // Safely try to close popup — wrapped in try/catch for COOP
+  try{ if(_oauthPopup) _oauthPopup.close(); }catch(e){}
   const saved=sessionStorage.getItem('gdrive_oauth_nonce');
   sessionStorage.removeItem('gdrive_oauth_nonce');
   if(msg.nonce!==saved){toast('⚠ Error de seguridad');return;}
@@ -1963,9 +2363,15 @@ async function detectCloudCallback(){
   if(!token) return false;
   let state={}; try{state=JSON.parse(decodeURIComponent(stRaw||'{}'));}catch{}
   if(state.provider!=='gdrive') return false;
+  // Popup flow
   if(window.opener&&!window.opener.closed){
     window.opener.postMessage({type:'gdrive_token',token,expiresIn:exp,nonce:state.nonce},window.location.origin);
     window.close(); return true;
+  }
+  // Silent iframe flow — post to parent without closing
+  if(window.parent&&window.parent!==window){
+    window.parent.postMessage({type:'gdrive_token',token,expiresIn:exp,nonce:state.nonce},window.location.origin);
+    return true;
   }
   const nonce=sessionStorage.getItem('gdrive_oauth_nonce');
   if(state.nonce&&state.nonce!==nonce){toast('⚠ Sesión expirada.');return false;}
@@ -2026,6 +2432,9 @@ async function saveGDriveToken(accessToken, expiresIn){
   connectedClouds['gdrive']=true;
   connectedClouds['_tok_gdrive']=accessToken;
   connectedClouds['_tok_'+accountKey]=accessToken;
+  // Remove any expired banner for this account and schedule fresh refresh
+  const eb=document.getElementById('tokenExpiredBanner'); if(eb) eb.remove();
+  scheduleTokenRefresh(accountKey,accountEmail,exp);
 
   toast('✓ '+accountEmail+' conectada — escaneando...');
   // Scan only this new account's files (don't delete other accounts' songs)
@@ -2173,8 +2582,59 @@ async function createPlaylist(){
 }
 function viewPlaylist(id){ toast('Playlists próximamente disponibles'); }
 
+// ══ MOBILE NAV ══
+function toggleMobileSidebar(){
+  const sb=document.querySelector('.sidebar');
+  const ov=document.getElementById('sidebarOverlay');
+  const open=sb.classList.toggle('mobile-open');
+  ov.classList.toggle('visible',open);
+}
+function closeMobileSidebar(){
+  document.querySelector('.sidebar').classList.remove('mobile-open');
+  document.getElementById('sidebarOverlay').classList.remove('visible');
+}
+
+// Map bottom-nav view ids to sidebar nav items
+const _mbnMap={
+  home:'mbnHome', songs:'mbnSongs', albums:'mbnAlbums',
+  artists:'mbnAlbums', playlists:'mbnSongs', liked:'mbnLiked',
+  clouds:'mbnClouds', accounts:'mbnClouds'
+};
+function mobileNav(view, btn){
+  // Update bottom nav active state
+  document.querySelectorAll('.mobile-nav-btn').forEach(b=>b.classList.remove('active'));
+  if(btn) btn.classList.add('active');
+  // Find the corresponding sidebar nav item and call showView
+  const navItems=document.querySelectorAll('.nav-item');
+  const viewMap={home:0,songs:1,albums:2,artists:3,playlists:4,liked:5};
+  const idx=viewMap[view];
+  const sidebarItem=idx!==undefined?navItems[idx]:null;
+  showView(view, sidebarItem);
+  if(sidebarItem){
+    navItems.forEach(n=>n.classList.remove('active'));
+    sidebarItem.classList.add('active');
+  }
+  closeMobileSidebar();
+}
+
+// Sync bottom nav when desktop sidebar is used
+// Patch showView para sincronizar el nav inferior en móvil
+(function(){
+  const orig=showView;
+  window.showView=function(view,el){
+    orig(view,el);
+    const btnId=_mbnMap[view];
+    if(btnId){
+      document.querySelectorAll('.mobile-nav-btn').forEach(b=>b.classList.remove('active'));
+      const btn=document.getElementById(btnId);
+      if(btn) btn.classList.add('active');
+    }
+  };
+})();
+
 // ══ BOOT ══
 document.getElementById('welcomeLogoImg').src=LOGO_B64;
+document.getElementById('mobileTopbarLogo').src=LOGO_B64;
 document.querySelectorAll('.loginLogoImg, .registerLogoImg').forEach(el=>el.src=LOGO_B64);
 checkSession();
 
