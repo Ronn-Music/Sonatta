@@ -39,6 +39,8 @@
     /* Evita el rebote/bounce en iOS que congela la vista */
     overscroll-behavior: none;
     -webkit-tap-highlight-color: transparent;
+    /* Android Chrome: evita que el navegador intercepte gestos táctiles */
+    touch-action: manipulation;
   }
 
   h1,h2,h3,h4 { font-family: 'Syne', sans-serif; }
@@ -600,13 +602,13 @@
   /* ══════════════════════════════════════
      MAIN APP
   ══════════════════════════════════════ */
-  #appScreen { flex-direction: column; height: 100vh; }
+  #appScreen { flex-direction: column; height: 100vh; height: 100dvh; }
 
   .app-body {
     display: flex;
     flex: 1;
     overflow: hidden;
-    height: calc(100vh - var(--player-h));
+    min-height: 0; /* crítico: evita que flex ignore el límite del padre */
   }
 
   /* SIDEBAR */
@@ -1078,11 +1080,13 @@
     display: none;
     position: fixed;
     bottom: 0; left: 0; right: 0;
-    height: 60px;
+    height: calc(60px + env(safe-area-inset-bottom));
+    padding-bottom: env(safe-area-inset-bottom);
     background: var(--bg2);
     border-top: 1px solid var(--border);
     z-index: 100;
-    padding: 0 4px;
+    padding-left: 4px;
+    padding-right: 4px;
     align-items: center;
     justify-content: space-around;
   }
@@ -1140,9 +1144,9 @@
       height: 100%;
       overflow-y: auto;
       overflow-x: hidden;
-      -webkit-overflow-scrolling: touch; /* inercia en Safari iOS */
+      /* ELIMINADO: -webkit-overflow-scrolling: touch — congela scroll en Android moderno */
       overscroll-behavior-y: contain;    /* evita que el scroll pase al body */
-      touch-action: pan-y;               /* permite scroll vertical, evita conflictos */
+      touch-action: pan-y pinch-zoom;   /* scroll vertical + zoom, evita conflictos en Android */
     }
     .view { padding: 16px; }
     .view-header {
@@ -1225,8 +1229,8 @@
       gap: 10px;
     }
 
-    /* Padding inferior para que el contenido no quede detrás del bottom nav */
-    .view { padding-bottom: calc(16px + env(safe-area-inset-bottom)); }
+    /* Padding inferior: player bar (90px) + bottom nav (60px) + espacio + safe area */
+    .view { padding-bottom: calc(var(--player-h) + 60px + 16px + env(safe-area-inset-bottom)); }
   }
 
   /* Extra small phones */
