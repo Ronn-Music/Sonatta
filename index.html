@@ -1549,10 +1549,25 @@ async function checkSession(){
         window.opener.postMessage({type:'gdrive_token',token,expiresIn:exp,nonce:state.nonce},window.location.origin);
         window.close(); return;
       }
-    } else if(hasError&&state.silent){
-      // Silent refresh failed (interaction_required, etc.) — tell parent
+    } else if(hasError){
       window.opener.postMessage({type:'gdrive_token_error',error:p.get('error'),nonce:state.nonce},window.location.origin);
-      window.close(); return;
+      if(state.silent) window.close();
+      return;
+    }
+  }
+  // Handle silent iframe callback (no opener, but has parent)
+  if((hasHash||hasError)&&window.parent&&window.parent!==window){
+    const p=new URLSearchParams(hash.replace('#',''));
+    let state={}; try{state=JSON.parse(decodeURIComponent(p.get('state')||'{}'));}catch{}
+    if(hasHash){
+      const token=p.get('access_token'),exp=parseInt(p.get('expires_in')||'3600');
+      if(token&&state.provider==='gdrive'){
+        window.parent.postMessage({type:'gdrive_token',token,expiresIn:exp,nonce:state.nonce},window.location.origin);
+        return;
+      }
+    } else if(hasError){
+      window.parent.postMessage({type:'gdrive_token_error',error:p.get('error'),nonce:state.nonce},window.location.origin);
+      return;
     }
   }
   // Use getSession first, then onAuthStateChange only for future changes — avoids lock contention
@@ -1599,9 +1614,11 @@ async function loadClouds(){
             access_token:acc.token,token_expires_at:acc.expires,connected_at:r.connected_at,expired:!!expired});
           if(!expired){anyActive=true;connectedClouds['_tok_'+acc.key]=acc.token;connectedClouds['_tok_'+r.provider]=acc.token;
             if(acc.expires) scheduleTokenRefresh(acc.key,acc.label||acc.key,acc.expires);
+          } else {
+            // Token ya expirado al cargar — intentar refresh silencioso automáticamente
+            console.log('⚠ Token expirado al cargar para',acc.key,'— intentando refresh silencioso...');
+            setTimeout(()=>autoRefreshToken(acc.key,acc.label||acc.key),1500);
           }
-          // NOTE: do NOT schedule silent refresh for already-expired tokens —
-          // Google blocks iframe OAuth (COOP policy). Banner shows when user tries to play.
         });
         if(anyActive)connectedClouds[r.provider]=true;
       } else {
@@ -1844,7 +1861,7 @@ function renderAccounts(){
       +(acc.expired
         ?'<button class="btn-connect" style="margin-left:12px;width:auto;padding:8px 14px;font-size:0.75rem" onclick="startConnect(\'gdrive\')">Reconectar</button>'
         :'<button class="btn-sync" style="margin-left:12px;width:auto;padding:8px 14px;font-size:0.75rem" onclick="syncCloud(\'gdrive\',\''+key+'\')">↻ Sync</button>'
-        +'<button class="btn-disconnect" style="margin-left:6px;width:auto;padding:8px 14px;font-size:0.75rem" onclick="disconnectCloud(\'gdrive\',\''+key+'\')">✕</button>')
+        +'<button class="btn-disconnect" style="margin-left:6px;width:auto;padding:8px 14px;font-size:0.75rem" onclick="disconnectCloud(\'gdrive\',\''+key+'\')">Desconectar</button>')
       +'</div>';
   }).join('')
   +'<div style="margin-top:16px"><button class="btn-connect" style="width:auto;padding:10px 20px" onclick="startConnect(\'gdrive\')">+ Agregar otra cuenta</button></div>';
@@ -2205,11 +2222,11 @@ function toggleMute(){
   const vf=document.getElementById('volFill'); if(vf) vf.style.width=isMuted?'0%':(volume*100)+'%';
 }
 
-// ══ TOKEN AUTO-REFRESH (SILENT POPUP) ══
+// ══ TOKEN AUTO-REFRESH (SILENT IFRAME) ══
 let _tokenRefreshTimers={};
 let _silentRefreshInProgress={};
 
-// ── 1. Open a tiny invisible popup with prompt=none to silently get a new token ──
+// ── 1. Silent refresh via hidden iframe — funciona con Google OAuth implícito sin popup ──
 function silentRefreshGDrive(accountKey){
   return new Promise(resolve=>{
     if(_silentRefreshInProgress[accountKey]){resolve(null);return;}
@@ -2225,16 +2242,27 @@ function silentRefreshGDrive(accountKey){
       +'&state='+encodeURIComponent(JSON.stringify({nonce,provider:'gdrive',silent:true}))
       +'&prompt=none'
       +'&login_hint='+encodeURIComponent(loginHint);
-    // Tiny off-screen popup — user never sees it
-    const popup=window.open(url,'SonataSilentRefresh','width=1,height=1,left=-3000,top=-3000,toolbar=no,menubar=no,status=no');
+
+    // Iframe oculto — Google permite prompt=none en iframes cuando la sesión sigue activa
+    const iframe=document.createElement('iframe');
+    iframe.style.cssText='position:fixed;width:1px;height:1px;top:-9999px;left:-9999px;border:none;opacity:0;pointer-events:none';
+    iframe.setAttribute('sandbox','allow-scripts allow-same-origin allow-forms allow-popups');
+    document.body.appendChild(iframe);
+
     function cleanup(result){
       clearTimeout(timer);
       window.removeEventListener('message',handler);
-      try{if(popup&&!popup.closed)popup.close();}catch(e){}
+      try{document.body.removeChild(iframe);}catch(e){}
       delete _silentRefreshInProgress[accountKey];
       resolve(result);
     }
-    const timer=setTimeout(()=>cleanup(null),15000);
+
+    // Timeout de 12 seg — si no responde, el usuario tiene sesión cerrada en Google
+    const timer=setTimeout(()=>{
+      console.warn('⏱ Silent refresh timeout for',accountKey);
+      cleanup(null);
+    },12000);
+
     function handler(ev){
       if(ev.origin!==window.location.origin)return;
       const msg=ev.data; if(!msg)return;
@@ -2242,7 +2270,9 @@ function silentRefreshGDrive(accountKey){
       else if(msg.type==='gdrive_token_error'&&msg.nonce===nonce) cleanup(null);
     }
     window.addEventListener('message',handler);
-    if(!popup){delete _silentRefreshInProgress[accountKey];resolve(null);}
+
+    // Cargar URL en el iframe — si la sesión de Google sigue activa, redirige al redirect_uri con el token
+    iframe.src=url;
   });
 }
 
@@ -2271,16 +2301,17 @@ async function updateGDriveTokenOnly(accountKey,newToken,expiresIn){
   }catch(e){console.error('updateGDriveTokenOnly:',e);return false;}
 }
 
-// ── 3. Try silent refresh → update token silently; fallback to banner only if Google requires interaction ──
+// ── 3. Try silent iframe refresh → if fails, try small visible popup → fallback banner ──
 async function autoRefreshToken(accountKey,label){
-  console.log('🔄 Silent refresh attempt for',label||accountKey);
+  console.log('🔄 Silent refresh attempt (iframe) for',label||accountKey);
   const result=await silentRefreshGDrive(accountKey);
   if(result&&result.token){
     await updateGDriveTokenOnly(accountKey,result.token,result.expiresIn||3600);
     const eb=document.getElementById('tokenExpiredBanner'); if(eb)eb.remove();
+    toast('🔑 Sesión renovada automáticamente');
     return true;
   }
-  // Silent refresh not possible (interaction required) — show banner as last resort
+  // Iframe falló — mostrar banner con un solo clic de reconexión
   console.warn('❌ Silent refresh failed for',label||accountKey,'— showing banner');
   showTokenExpiredBanner(accountKey,label);
   return false;
@@ -2291,12 +2322,29 @@ function showTokenExpiredBanner(accountKey,label){
   const banner=document.createElement('div');
   banner.id='tokenExpiredBanner';
   banner.style.cssText='position:fixed;top:0;left:0;right:0;z-index:9999;background:linear-gradient(90deg,#7c3aed,#dc2626);color:white;padding:11px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:0.82rem;font-family:\'DM Sans\',sans-serif;box-shadow:0 4px 20px rgba(0,0,0,0.5)';
-  banner.innerHTML='<span>🔑 Sesión de <strong>'+(label||accountKey)+'</strong> cerrada — toca para reconectar</span>'
+  const ak=accountKey||'gdrive';
+  const lbl=label||accountKey||'Google Drive';
+  banner.innerHTML='<span>🔑 Sesión de <strong>'+lbl+'</strong> cerrada — reconecta para seguir escuchando</span>'
     +'<div style="display:flex;gap:8px;flex-shrink:0">'
-    +'<button onclick="startConnect(\'gdrive\');document.getElementById(\'tokenExpiredBanner\').remove()" style="background:white;color:#7c3aed;border:none;border-radius:8px;padding:6px 14px;font-weight:700;font-size:0.8rem;cursor:pointer">Reconectar</button>'
+    +'<button id="bannerReconnectBtn" style="background:white;color:#7c3aed;border:none;border-radius:8px;padding:6px 14px;font-weight:700;font-size:0.8rem;cursor:pointer">↻ Reconectar</button>'
     +'<button onclick="this.parentElement.parentElement.remove()" style="background:rgba(255,255,255,0.2);color:white;border:none;border-radius:8px;padding:6px 10px;font-size:0.8rem;cursor:pointer">✕</button>'
     +'</div>';
   document.body.prepend(banner);
+  // Al tocar reconectar: primero intenta iframe silencioso, si falla abre popup visible
+  document.getElementById('bannerReconnectBtn').addEventListener('click',async function(){
+    this.textContent='⏳ Reconectando...'; this.disabled=true;
+    const refreshed=await silentRefreshGDrive(ak);
+    if(refreshed&&refreshed.token){
+      await updateGDriveTokenOnly(ak,refreshed.token,refreshed.expiresIn||3600);
+      banner.remove();
+      toast('🔑 Sesión renovada — reproduciendo...');
+      if(currentSongIdx!==-1) playSongById(songs[currentSongIdx].id);
+    } else {
+      // Silencioso falló — abrir popup OAuth normal
+      banner.remove();
+      startConnect('gdrive');
+    }
+  });
 }
 
 // ── 4. Schedule proactive silent refresh 5 min before expiry ──
@@ -2368,9 +2416,14 @@ async function detectCloudCallback(){
     window.opener.postMessage({type:'gdrive_token',token,expiresIn:exp,nonce:state.nonce},window.location.origin);
     window.close(); return true;
   }
-  // Silent iframe flow — post to parent without closing
+  // Silent iframe flow — post to parent without closing (used by silentRefreshGDrive)
   if(window.parent&&window.parent!==window){
-    window.parent.postMessage({type:'gdrive_token',token,expiresIn:exp,nonce:state.nonce},window.location.origin);
+    if(hasHash){
+      window.parent.postMessage({type:'gdrive_token',token,expiresIn:exp,nonce:state.nonce},window.location.origin);
+    } else if(hasError&&state.silent){
+      const p2=new URLSearchParams(hash.replace('#',''));
+      window.parent.postMessage({type:'gdrive_token_error',error:p2.get('error'),nonce:state.nonce},window.location.origin);
+    }
     return true;
   }
   const nonce=sessionStorage.getItem('gdrive_oauth_nonce');
