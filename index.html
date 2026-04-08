@@ -1871,11 +1871,40 @@ async function initApp(){
   document.getElementById('homeGreeting').textContent='Hola, '+currentUser.name.split(' ')[0]+' 👋';
   const sli=document.getElementById('sidebarLogoImg');
   sli.src=LOGO_B64; sli.onerror=()=>sli.style.display='none';
-  // Mostrar indicador de carga mientras se obtienen datos (evita sensación de freeze)
-  toast('⏳ Cargando tu biblioteca...');
-  await loadClouds(); await loadPlaylists(); await loadSongsFromDB();
-  updateStats(); renderAll();
-  toast('✓ Biblioteca lista — '+songs.length+' canciones');
+
+  // FREEZE FIX: cargar en etapas con pausas entre cada await
+  // para que el browser pueda repintar entre operaciones pesadas
+  toast('⏳ Conectando a tu biblioteca...');
+
+  // Etapa 1: nubes y playlists (rápido)
+  await loadClouds();
+  await loadPlaylists();
+  updateStats();
+
+  // Dar al browser un frame para respirar antes de la carga pesada
+  await new Promise(r => setTimeout(r, 50));
+
+  // Etapa 2: cargar canciones en páginas (7808 canciones = múltiples páginas)
+  // Mostrar las primeras canciones tan pronto lleguen, sin esperar todas
+  await loadSongsFromDB();
+
+  // Etapa 3: renderizar en partes para no bloquear el hilo
+  renderHomeSongs();
+  renderRecentGrid();
+  updateStats();
+
+  // Dar otro frame antes de renderizar las listas grandes
+  await new Promise(r => setTimeout(r, 30));
+  renderAllSongs();
+
+  await new Promise(r => setTimeout(r, 30));
+  renderAlbums(); renderArtists();
+
+  await new Promise(r => setTimeout(r, 30));
+  renderClouds(); renderPlaylists(); renderLiked();
+
+  if(window._activateTouchOnButtons) setTimeout(window._activateTouchOnButtons, 150);
+  toast('✓ '+songs.length+' canciones listas');
 }
 
 // ══ DATA ══
@@ -2074,49 +2103,150 @@ function renderRecentGrid(){
     +'</div>'
   ).join('');
 }
+// ══ VIRTUAL SCROLL para lista de canciones (evita freeze con 7000+ canciones) ══
+const VROW_H = 52; // altura en px de cada song-row
+let _vsongs = [];  // canciones filtradas actuales para el virtual scroll
+let _vscrollEl = null;
+
 function renderAllSongs(filter){
-  filter=filter||'';
-  const listEl=document.getElementById('allSongsList');
-  const gridEl=document.getElementById('allSongsGrid');
+  filter = filter || '';
+  const listEl = document.getElementById('allSongsList');
+  const gridEl = document.getElementById('allSongsGrid');
   if(!listEl) return;
-  const fl=filter.toLowerCase();
-  const f=fl?songs.filter(s=>s.title.toLowerCase().includes(fl)||s.artist.toLowerCase().includes(fl)||s.album.toLowerCase().includes(fl)):songs;
-  if(songsViewMode==='grid'){
-    listEl.style.display='none';
-    if(gridEl){gridEl.style.display='grid';gridEl.innerHTML=f.length?f.map(s=>songGridCardHTML(s)).join(''):empty('Sin resultados');}
-  } else {
-    listEl.style.display=''; if(gridEl) gridEl.style.display='none';
-    listEl.innerHTML=f.length?f.map((s,i)=>songRowHTML(s,i+1)).join(''):empty(songs.length?'Sin resultados':'Conecta una nube 🎵');
+
+  const fl = filter.toLowerCase();
+  _vsongs = fl
+    ? songs.filter(s =>
+        s.title.toLowerCase().includes(fl) ||
+        s.artist.toLowerCase().includes(fl) ||
+        s.album.toLowerCase().includes(fl))
+    : songs;
+
+  if(songsViewMode === 'grid'){
+    listEl.style.display = 'none';
+    if(gridEl){
+      gridEl.style.display = 'grid';
+      // Grid: renderizar en chunks para no bloquear
+      gridEl.innerHTML = '';
+      _renderGridChunked(_vsongs, gridEl, 0);
+    }
+    return;
+  }
+
+  // Modo lista: virtual scroll
+  listEl.style.display = '';
+  if(gridEl) gridEl.style.display = 'none';
+
+  if(!_vsongs.length){
+    listEl.innerHTML = empty(songs.length ? 'Sin resultados' : 'Conecta una nube 🎵');
+    return;
+  }
+
+  // Montar el contenedor virtual si no existe
+  listEl.innerHTML = '';
+  const totalH = _vsongs.length * VROW_H;
+
+  // Contenedor exterior con altura total (para que el scrollbar sea correcto)
+  const outer = document.createElement('div');
+  outer.style.cssText = 'position:relative;height:'+totalH+'px;';
+  listEl.appendChild(outer);
+
+  // Encontrar el scrollable parent (.main)
+  const mainEl = document.querySelector('.main');
+  _vscrollEl = mainEl;
+
+  // Pintar las filas visibles
+  function paintVisible(){
+    const scrollTop = mainEl ? mainEl.scrollTop : 0;
+    const viewH = mainEl ? mainEl.clientHeight : window.innerHeight;
+    // Rango visible + buffer de 5 filas arriba y abajo
+    const startIdx = Math.max(0, Math.floor(scrollTop / VROW_H) - 5);
+    const endIdx   = Math.min(_vsongs.length - 1, Math.ceil((scrollTop + viewH) / VROW_H) + 5);
+
+    // Limpiar filas viejas
+    outer.innerHTML = '';
+    const frag = document.createDocumentFragment();
+    for(let i = startIdx; i <= endIdx; i++){
+      const row = document.createElement('div');
+      row.style.cssText = 'position:absolute;top:'+(i*VROW_H)+'px;left:0;right:0;height:'+VROW_H+'px;';
+      row.innerHTML = songRowHTML(_vsongs[i], i+1);
+      frag.appendChild(row);
+    }
+    outer.appendChild(frag);
+  }
+
+  paintVisible();
+
+  // Escuchar scroll en .main y repintar
+  if(mainEl){
+    // Remover listener anterior si existe
+    if(mainEl._vsListener) mainEl.removeEventListener('scroll', mainEl._vsListener);
+    mainEl._vsListener = function(){
+      if(mainEl._vsRaf) cancelAnimationFrame(mainEl._vsRaf);
+      mainEl._vsRaf = requestAnimationFrame(paintVisible);
+    };
+    mainEl.addEventListener('scroll', mainEl._vsListener, { passive: true });
+  }
+}
+
+// Renderizar grid en chunks para no bloquear el hilo
+function _renderGridChunked(arr, el, from){
+  const CHUNK = 50;
+  const to = Math.min(from + CHUNK, arr.length);
+  let html = '';
+  for(let i = from; i < to; i++) html += songGridCardHTML(arr[i]);
+  el.innerHTML += html;
+  if(to < arr.length){
+    setTimeout(()=> _renderGridChunked(arr, el, to), 16);
   }
 }
 function renderAlbums(){
   const el=document.getElementById('albumsGrid'); if(!el) return;
   const m={};
   songs.forEach(s=>{
-    // FIX 5: group by real album name
     const key=s.album||'Sin álbum';
     if(!m[key]) m[key]={...s,count:0,album:key};
     m[key].count++;
   });
   const a=Object.values(m);
-  el.innerHTML=a.length?a.map(s=>
-    '<div class="album-card" data-songid="'+s.id+'">'
-    +'<div class="album-art" style="'+artStyle(s)+';display:flex;align-items:center;justify-content:center;font-size:2.2rem;font-weight:800;color:rgba(255,255,255,0.2)">'+(s.coverUrl?'':((s.album||'?').charAt(0).toUpperCase()))+'</div>'
-    +'<div class="album-info"><div class="album-name">'+s.album+'</div><div class="album-artist">'+s.artist+'</div><div class="album-count">'+s.count+' canción'+(s.count!==1?'es':'')+'</div></div>'
-    +'</div>'
-  ).join(''):empty('Sin álbumes. Conecta una nube.');
+  if(!a.length){ el.innerHTML=empty('Sin álbumes. Conecta una nube.'); return; }
+  el.innerHTML='';
+  _renderAlbumChunked(a, el, 0);
+}
+function _renderAlbumChunked(arr, el, from){
+  const CHUNK=60, to=Math.min(from+CHUNK,arr.length);
+  let html='';
+  for(let i=from;i<to;i++){
+    const s=arr[i];
+    html+='<div class="album-card" data-songid="'+s.id+'">'
+      +'<div class="album-art" style="'+artStyle(s)+';display:flex;align-items:center;justify-content:center;font-size:2.2rem;font-weight:800;color:rgba(255,255,255,0.2)">'+(s.coverUrl?'':((s.album||'?').charAt(0).toUpperCase()))+'</div>'
+      +'<div class="album-info"><div class="album-name">'+s.album+'</div><div class="album-artist">'+s.artist+'</div><div class="album-count">'+s.count+' canción'+(s.count!==1?'es':'')+'</div></div>'
+      +'</div>';
+  }
+  el.innerHTML+=html;
+  if(to<arr.length) setTimeout(()=>_renderAlbumChunked(arr,el,to),16);
 }
 function renderArtists(){
   const el=document.getElementById('artistsGrid'); if(!el) return;
   const m={};
   songs.forEach(s=>{if(!m[s.artist])m[s.artist]={...s,count:0};m[s.artist].count++;});
   const a=Object.values(m);
-  el.innerHTML=a.length?a.map(s=>
-    '<div class="album-card" data-songid="'+s.id+'">'
-    +'<div class="album-art" style="'+artStyle(s)+';border-radius:50% 50% 0 0;display:flex;align-items:center;justify-content:center;font-size:2.2rem;font-weight:800;color:rgba(255,255,255,0.2)">'+artInitial(s)+'</div>'
-    +'<div class="album-info"><div class="album-name">'+s.artist+'</div><div class="album-count">'+s.count+' canción'+(s.count!==1?'es':'')+'</div></div>'
-    +'</div>'
-  ).join(''):empty('Sin artistas.');
+  if(!a.length){ el.innerHTML=empty('Sin artistas.'); return; }
+  el.innerHTML='';
+  _renderArtistChunked(a, el, 0);
+}
+function _renderArtistChunked(arr, el, from){
+  const CHUNK=60, to=Math.min(from+CHUNK,arr.length);
+  let html='';
+  for(let i=from;i<to;i++){
+    const s=arr[i];
+    html+='<div class="album-card" data-songid="'+s.id+'">'
+      +'<div class="album-art" style="'+artStyle(s)+';border-radius:50% 50% 0 0;display:flex;align-items:center;justify-content:center;font-size:2.2rem;font-weight:800;color:rgba(255,255,255,0.2)">'+artInitial(s)+'</div>'
+      +'<div class="album-info"><div class="album-name">'+s.artist+'</div><div class="album-count">'+s.count+' canción'+(s.count!==1?'es':'')+'</div></div>'
+      +'</div>';
+  }
+  el.innerHTML+=html;
+  if(to<arr.length) setTimeout(()=>_renderArtistChunked(arr,el,to),16);
 }
 function renderLiked(){
   const el=document.getElementById('likedSongsList'); if(!el) return;
@@ -2350,7 +2480,22 @@ async function playSongById(id){
   document.getElementById('npHeart').textContent=song.liked?'♥':'♡';
   document.getElementById('npHeart').classList.toggle('liked',song.liked);
   syncNpModal();
-  renderHomeSongs(); renderAllSongs();
+  // Actualizar solo el estado visual de "playing" en las filas ya renderizadas
+  // sin re-renderizar toda la lista (muy costoso con 7808+ canciones)
+  document.querySelectorAll('.song-row').forEach(r=>{
+    const sid = r.getAttribute('data-songid');
+    r.classList.toggle('playing', String(sid)===String(id));
+    const numEl = r.querySelector('.song-num');
+    if(numEl){
+      if(String(sid)===String(id)){
+        numEl.innerHTML='<div class="eq-bars"><div class="eq-bar"></div><div class="eq-bar"></div><div class="eq-bar"></div></div>';
+      } else {
+        const i2 = r.getAttribute('data-idx');
+        if(i2) numEl.textContent = i2;
+      }
+    }
+  });
+  renderHomeSongs();
 
   if(!song.fileUrl){
     audioEl.src=''; isPlaying=false; updatePlayBtn();
@@ -2391,16 +2536,34 @@ async function playSongById(id){
   }
   if(!token){ showTokenExpiredBanner('gdrive','Google Drive'); return; }
 
-  // Construir URL correcta de Google Drive (extraer fileId limpio)
-  // Soporta: ?alt=media, /files/ID?alt=media, /files/ID
-  let fileUrl = song.fileUrl;
+  // Construir URL correcta de Google Drive — extraer solo el fileId
+  // Soporta cualquier formato guardado: /files/ID, /files/ID?alt=media, /files/ID?alt=media=1
+  let fileUrl = song.fileUrl || '';
   let fileId = null;
-  try {
-    const m = fileUrl.match(/\/files\/([a-zA-Z0-9_-]+)/);
+
+  // Intentar extraer el ID desde file_path (formato: "gdrive:email@gmail.com:FILEID" o "accountKey:FILEID")
+  if(song.filePath){
+    const parts = song.filePath.split(':');
+    // El ID de Drive es el último segmento si tiene 44 chars aprox (IDs de Drive son alfanuméricos largos)
+    const lastPart = parts[parts.length - 1];
+    if(lastPart && lastPart.length > 20 && /^[a-zA-Z0-9_-]+$/.test(lastPart)){
+      fileId = lastPart;
+    }
+  }
+
+  // Fallback: extraer de la URL guardada
+  if(!fileId && fileUrl){
+    const m = fileUrl.match(/\/files\/([a-zA-Z0-9_-]{20,})/);
     if(m) fileId = m[1];
-    // Si la URL guardada tiene parámetros extra o es incorrecta, reconstruirla
-    if(fileId) fileUrl = 'https://www.googleapis.com/drive/v3/files/'+fileId+'?alt=media';
-  } catch(e){}
+  }
+
+  if(!fileId){
+    toast('⚠ No se puede identificar el archivo. Sincroniza de nuevo.');
+    isPlaying=false; updatePlayBtn(); return;
+  }
+
+  // Construir URL limpia siempre — ignora lo que estaba guardado
+  fileUrl = 'https://www.googleapis.com/drive/v3/files/' + fileId + '?alt=media';
 
   toast('⏳ Cargando '+song.title+'...');
 
