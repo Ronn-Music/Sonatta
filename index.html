@@ -3075,16 +3075,11 @@ function connectGDrivePopup(){
     +'&scope='+encodeURIComponent(scope)
     +'&state='+encodeURIComponent(JSON.stringify({nonce,provider:'gdrive'}))
     +'&prompt='+encodeURIComponent('select_account consent');
-  const w=520,h=620,l=Math.round(screen.width/2-w/2),t=Math.round(screen.height/2-h/2);
-  _oauthPopup=window.open(url,'SonattaOAuth','width='+w+',height='+h+',left='+l+',top='+t+',toolbar=no,menubar=no');
-  if(!_oauthPopup){toast('⚠ Popup bloqueado. Permite popups e intenta de nuevo.');return;}
-  toast('🔐 Autoriza en la ventana de Google...');
-  window.addEventListener('message',_oauthMsg,{once:false});
-  // COOP fix: do NOT poll _oauthPopup.closed — Google blocks cross-origin window access.
-  // Auto-cleanup listener after 10 min as fallback.
-  _oauthInterval=setTimeout(()=>{ window.removeEventListener('message',_oauthMsg); _oauthPopup=null; }, 600000);
+  // Redirección directa — más confiable que popup (evita problemas COOP de Google)
+  window.location.href = url;
 }
 async function _oauthMsg(ev){
+  console.log('📨 _oauthMsg recibido — origin:',ev.origin,'type:',ev.data?.type);
   if(ev.origin!==window.location.origin) return;
   const msg=ev.data; if(!msg||(msg.type!=='gdrive_token'&&msg.type!=='gdrive_code')) return;
   clearTimeout(_oauthInterval); window.removeEventListener('message',_oauthMsg);
@@ -3098,10 +3093,8 @@ async function _oauthMsg(ev){
     const{data:{session}}=await _supabase.auth.getSession();
     const supaToken=session?.access_token||'';
     try{
+      console.log('📨 Llamando /api/exchange-code con code...');
       const res=await fetch('/api/exchange-code',{
-        method:'POST',
-        headers:{'Content-Type':'application/json','Authorization':'Bearer '+supaToken},
-        body:JSON.stringify({code:msg.code,redirect_uri:GOOGLE_REDIRECT})
       });
       const data=await res.json();
       if(!data.access_token){toast('Error al conectar: '+(data.error||'desconocido'));return;}
@@ -3118,23 +3111,31 @@ async function detectCloudCallback(){
   const hash=window.location.hash;
   const hasCode=search.includes('code=');
   const hasToken=hash.includes('access_token=');
+  console.log('🔍 detectCloudCallback — hasCode:',hasCode,'hasToken:',hasToken,'opener:',!!window.opener,'search:',search.substring(0,80));
   if(!hasCode&&!hasToken) return false;
 
   if(hasCode){
     const p=new URLSearchParams(search.replace('?',''));
     const code=p.get('code'), stRaw=p.get('state');
+    console.log('🔍 code presente:',!!code,'state raw:',stRaw?.substring(0,60));
     if(!code) return false;
     // IMPORTANTE: verificar que el state es de Google Drive y no de Supabase auth
     let state={}; try{state=JSON.parse(decodeURIComponent(stRaw||'{}'));}catch{}
+    console.log('🔍 state.provider:',state.provider,'state.nonce:',state.nonce);
     if(state.provider!=='gdrive') return false; // Si no es gdrive, dejar que Supabase lo maneje
     window.history.replaceState({},document.title,window.location.pathname);
     if(window.opener&&!window.opener.closed){
+      console.log('🔍 Enviando postMessage al opener...');
       window.opener.postMessage({type:'gdrive_code',code,nonce:state.nonce},window.location.origin);
       window.close(); return true;
     }
     // Sin popup (redirect directo) -- intercambiar aqui mismo
+    console.log('🔍 Sin opener — intercambiando directo. nonce en localStorage:',localStorage.getItem('gdrive_oauth_nonce'),'nonce en state:',state.nonce);
     const nonce=localStorage.getItem('gdrive_oauth_nonce');
-    if(state.nonce&&state.nonce!==nonce){toast('Sesion expirada.');return false;}
+    if(state.nonce&&state.nonce!==nonce){
+      console.error('🔍 NONCE MISMATCH — state:',state.nonce,'local:',nonce);
+      toast('Sesion expirada.');return false;
+    }
     localStorage.removeItem('gdrive_oauth_nonce');
     const{data:{session}}=await _supabase.auth.getSession();
     const supaToken=session?.access_token||'';
