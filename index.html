@@ -3129,7 +3129,7 @@ async function scanGDrive(token, accountKey, deleteFirst=true){
     do {
       let url='https://www.googleapis.com/drive/v3/files'
         +'?q='+encodeURIComponent(tipos)
-        +'&fields='+encodeURIComponent('nextPageToken,files(id,name,mimeType)')
+        +'&fields='+encodeURIComponent('nextPageToken,files(id,name,mimeType,thumbnailLink,hasThumbnail)')
         +'&pageSize=1000';
       if(pageToken) url+='&pageToken='+encodeURIComponent(pageToken);
       toast('⏳ Escaneando pág '+pagina+'...');
@@ -3171,7 +3171,11 @@ async function scanGDrive(token, accountKey, deleteFirst=true){
           // URL limpia — playSongById construye la URL final con ?alt=media + token
           file_url:'https://www.googleapis.com/drive/v3/files/'+file.id,
           cloud_provider:'gdrive',
-          account_key: accountKey||'gdrive'
+          account_key: accountKey||'gdrive',
+          // thumbnailLink de Drive ya es público (sin auth) — úsalo como carátula
+          cover_url: (file.hasThumbnail && file.thumbnailLink)
+            ? file.thumbnailLink.replace(/=s\d+$/, '=s400')
+            : null
         };
       });
       const{error}=await _supabase.from('songs').upsert(rows,{onConflict:'user_id,file_path',ignoreDuplicates:true});
