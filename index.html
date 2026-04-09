@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Sonatta — Tu música en las nubes</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsmediatags/3.9.5/jsmediatags.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&family=Syne:wght@400;600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,300&display=swap" rel="stylesheet">
 <style>
   :root {
@@ -2079,7 +2080,6 @@ function _hideLoadingOverlay(){
 
 function _mapSongs(data){
   return data.map(s=>{
-    // Extraer fileId del filePath para construir thumbnail autenticado
     let fileId=null;
     if(s.file_path){
       const parts=s.file_path.split(':');
@@ -2129,46 +2129,11 @@ function updateStats(){
 }
 
 // ══ RENDER ══
-function _getThumbUrl(song){
-  if(song.coverUrl) return song.coverUrl;
-  if(song.fileId&&song.cloud==='gdrive'){
-    // Buscar token disponible
-    const tok=connectedClouds['_tok_'+(song.accountKey||'')]
-      ||connectedClouds['_tok_gdrive'];
-    if(tok&&!_thumbCache[song.fileId+'_loading']){
-      // Lanzar fetch async para obtener thumbnailLink real (lh3.googleusercontent.com — sin auth)
-      _loadThumbAsync(song.fileId, tok);
-    }
-    return _thumbCache[song.fileId]||null;
-  }
-  return null;
-}
-const _thumbCache={};
-async function _loadThumbAsync(fileId, tok){
-  if(_thumbCache[fileId]||_thumbCache[fileId+'_loading']) return;
-  _thumbCache[fileId+'_loading']=true;
-  try{
-    const r=await fetch('https://www.googleapis.com/drive/v3/files/'+fileId+'?fields=thumbnailLink',
-      {headers:{Authorization:'Bearer '+tok}});
-    if(!r.ok) return;
-    const d=await r.json();
-    if(d.thumbnailLink){
-      // thumbnailLink de lh3.googleusercontent.com funciona sin auth
-      _thumbCache[fileId]=d.thumbnailLink.replace(/=s[0-9]+$/,'=s400');
-      // Actualizar elementos ya renderizados con este fileId
-      document.querySelectorAll('[data-fid="'+fileId+'"]').forEach(el=>{
-        el.style.backgroundImage='url('+JSON.stringify(_thumbCache[fileId])+')';
-        el.textContent='';
-      });
-    }
-  }catch(e){}
-}
 function artStyle(song){
-  const url=_getThumbUrl(song);
-  if(url) return 'background:url('+JSON.stringify(url)+') center/cover no-repeat';
+  if(song.coverUrl) return 'background:url('+JSON.stringify(song.coverUrl)+') center/cover no-repeat';
   return 'background:'+artistColor(song.artist);
 }
-function artInitial(song){ return _getThumbUrl(song)?'':((song.artist||'?').charAt(0).toUpperCase()); }
+function artInitial(song){ return song.coverUrl?'':((song.artist||'?').charAt(0).toUpperCase()); }
 
 function songRowHTML(song, idx){
   const cl={gdrive:'Drive',onedrive:'OneDrive',dropbox:'Dropbox',box:'Box',s3:'S3',pcloud:'pCloud'};
@@ -2177,7 +2142,7 @@ function songRowHTML(song, idx){
   return '<div class="song-row '+(playing?'playing':'')+'" data-songid="'+song.id+'" data-idx="'+idx+'">'
     +'<div class="song-num">'+(playing?'<div class="eq-bars"><div class="eq-bar"></div><div class="eq-bar"></div><div class="eq-bar"></div></div>':idx)+'</div>'
     +'<div class="song-info-cell">'
-    +'<div class="song-mini-art" data-fid="'+(song.fileId||'')+'" style="'+artStyle(song)+'">'+artInitial(song)+'</div>'
+    +'<div class="song-mini-art" data-fid="'+(song.fileId||'')+'" data-sid="'+song.id+'" data-ak="'+(song.accountKey||'')+'" style="'+artStyle(song)+'">'+artInitial(song)+'</div>'
     +'<span class="song-title">'+song.title+'<span class="song-cloud-badge">'+(cl[song.cloud]||song.cloud)+'</span></span>'
     +'</div>'
     +'<div class="song-artist-cell">'+song.artist+'</div>'
@@ -2196,7 +2161,7 @@ function songGridCardHTML(song){
     artInner='<span>'+((song.artist||'?').charAt(0).toUpperCase())+'</span>';
   }
   return '<div class="song-grid-card'+(playing?' playing':'')+'" data-songid="'+song.id+'">'
-    +'<div class="song-grid-art" data-fid="'+(song.fileId||'')+'" style="'+artStyle(song)+'">'+artInner+'</div>'
+    +'<div class="song-grid-art" data-fid="'+(song.fileId||'')+'" data-sid="'+song.id+'" data-ak="'+(song.accountKey||'')+'" style="'+artStyle(song)+'">'+artInner+'</div>'
     +'<div class="song-grid-info">'
     +'<div class="song-grid-title">'+song.title+'</div>'
     +'<div class="song-grid-artist">'+song.artist+'</div>'
@@ -2263,7 +2228,7 @@ function renderRecentGrid(){
   const albs=[...new Map(songs.map(s=>[s.album,s])).values()].slice(0,6);
   el.innerHTML=albs.map(s=>
     '<div class="album-card" data-songid="'+s.id+'">'
-    +'<div class="album-art" data-fid="'+(s.fileId||'')+'" style="'+artStyle(s)+';display:flex;align-items:center;justify-content:center;font-size:2.2rem;font-weight:800;color:rgba(255,255,255,0.2)">'+artInitial(s)+'</div>'
+    +'<div class="album-art" style="'+artStyle(s)+';display:flex;align-items:center;justify-content:center;font-size:2.2rem;font-weight:800;color:rgba(255,255,255,0.2)">'+artInitial(s)+'</div>'
     +'<div class="album-info"><div class="album-name">'+s.album+'</div><div class="album-artist">'+s.artist+'</div></div>'
     +'</div>'
   ).join('');
@@ -2338,6 +2303,7 @@ function renderAllSongs(filter){
       frag.appendChild(row);
     }
     outer.appendChild(frag);
+    setTimeout(_initCoverObserver,50);
   }
 
   paintVisible();
@@ -2384,7 +2350,7 @@ function _renderAlbumChunked(arr, el, from){
   for(let i=from;i<to;i++){
     const s=arr[i];
     html+='<div class="album-card" data-songid="'+s.id+'">'
-      +'<div class="album-art" style="'+artStyle(s)+';display:flex;align-items:center;justify-content:center;font-size:2.2rem;font-weight:800;color:rgba(255,255,255,0.2)">'+(_getThumbUrl(s)?'':((s.album||'?').charAt(0).toUpperCase()))+'</div>'
+      +'<div class="album-art" style="'+artStyle(s)+';display:flex;align-items:center;justify-content:center;font-size:2.2rem;font-weight:800;color:rgba(255,255,255,0.2)">'+(s.coverUrl?'':((s.album||'?').charAt(0).toUpperCase()))+'</div>'
       +'<div class="album-info"><div class="album-name">'+s.album+'</div><div class="album-artist">'+s.artist+'</div><div class="album-count">'+s.count+' canción'+(s.count!==1?'es':'')+'</div></div>'
       +'</div>';
   }
@@ -2532,11 +2498,10 @@ function syncNpModal(){
   // Remove old img if any
   const oldImg=cover.querySelector('img');
   if(oldImg) oldImg.remove();
-  const _npModalThumb=_getThumbUrl(song);
-  if(_npModalThumb){
+  if(song.coverUrl){
     init.style.display='none';
     const img=document.createElement('img');
-    img.src=_npModalThumb;
+    img.src=song.coverUrl;
     img.onerror=()=>{ img.remove(); init.style.display='flex'; init.textContent=(song.artist||'?').charAt(0).toUpperCase(); cover.style.background=artistColor(song.artist); };
     cover.insertBefore(img,cover.firstChild);
     cover.style.background='';
@@ -2641,7 +2606,7 @@ async function playSongById(id){
   document.getElementById('npTitle').textContent=song.title;
   document.getElementById('npArtist').textContent=song.artist;
   const npArt=document.getElementById('npArt');
-  const _npThumb=_getThumbUrl(song); if(_npThumb){ npArt.style.background='url('+JSON.stringify(_npThumb)+') center/cover no-repeat'; npArt.textContent=''; }
+  if(song.coverUrl){ npArt.style.background='url('+JSON.stringify(song.coverUrl)+') center/cover no-repeat'; npArt.textContent=''; }
   else { npArt.style.background=artistColor(song.artist); npArt.textContent=(song.artist||'?').charAt(0).toUpperCase(); }
   document.getElementById('npHeart').textContent=song.liked?'♥':'♡';
   document.getElementById('npHeart').classList.toggle('liked',song.liked);
@@ -2732,6 +2697,7 @@ async function playSongById(id){
   fileUrl = 'https://www.googleapis.com/drive/v3/files/' + fileId + '?alt=media';
 
   toast('⏳ Cargando '+song.title+'...');
+  if(song.fileId) _loadID3Cover(song.fileId, song.accountKey);
 
   try {
     const res = await fetch(fileUrl, {
@@ -3356,6 +3322,131 @@ function mobileNav(view, btn){
     }
   };
 })();
+
+
+// ══ ID3 COVER ART SYSTEM ══
+// Carga carátulas leyendo tags ID3 del MP3 — igual que CloudBeats
+// Solo carga las canciones visibles (lazy via IntersectionObserver)
+
+const _coverCache = {};      // fileId -> dataURL o 'none'
+const _coverPending = {};    // fileId -> true (ya en proceso)
+let _coverObserver = null;
+
+function _getToken(accountKey){
+  return connectedClouds['_tok_'+(accountKey||'')]
+    || connectedClouds['_tok_gdrive']
+    || Object.keys(connectedClouds).filter(k=>k.startsWith('_tok_')&&k!=='_tok_gdrive'&&!k.includes('_accounts')).map(k=>connectedClouds[k])[0]
+    || null;
+}
+
+function _applycover(fileId, dataUrl){
+  // Actualizar todos los elementos con este fileId en el DOM
+  document.querySelectorAll('[data-fid="'+fileId+'"]').forEach(el=>{
+    el.style.backgroundImage = 'url('+JSON.stringify(dataUrl)+')';
+    el.style.backgroundSize = 'cover';
+    el.style.backgroundPosition = 'center';
+    el.textContent = '';
+    // También actualizar en npArt y npModal si es la canción actual
+    const song = currentSongIdx>=0 ? songs[currentSongIdx] : null;
+    if(song && song.fileId===fileId){
+      const npArt = document.getElementById('npArt');
+      if(npArt){ npArt.style.background='url('+JSON.stringify(dataUrl)+') center/cover'; npArt.textContent=''; }
+      const cover = document.getElementById('npModalCover');
+      if(cover){
+        let img = cover.querySelector('img');
+        if(!img){ img=document.createElement('img'); img.style.cssText='position:absolute;inset:0;width:100%;height:100%;object-fit:cover;'; cover.insertBefore(img,cover.firstChild); }
+        img.src = dataUrl;
+        document.getElementById('npModalInitial').style.display='none';
+      }
+    }
+  });
+  // Guardar en Supabase para no repetir en futuras sesiones
+  const song = songs.find(s=>s.fileId===fileId);
+  if(song && !song.coverUrl && currentUser){
+    song.coverUrl = dataUrl;
+    _supabase.from('songs').update({cover_url:dataUrl}).eq('id',song.id).then(()=>{});
+  }
+}
+
+function _loadID3Cover(fileId, accountKey){
+  if(!fileId) return;
+  if(_coverCache[fileId]){ if(_coverCache[fileId]!=='none') _applycover(fileId,_coverCache[fileId]); return; }
+  if(_coverPending[fileId]) return;
+  _coverPending[fileId] = true;
+
+  const token = _getToken(accountKey);
+  if(!token){ delete _coverPending[fileId]; return; }
+
+  const url = 'https://www.googleapis.com/drive/v3/files/'+fileId+'?alt=media';
+
+  // jsmediatags puede leer solo el inicio del archivo (los tags ID3 están al principio)
+  // Usamos un fetch parcial — Range: bytes=0-131072 (128KB suficiente para tags + imagen)
+  fetch(url, {
+    headers: { Authorization: 'Bearer '+token, Range: 'bytes=0-131072' }
+  })
+  .then(r => {
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    return r.blob();
+  })
+  .then(blob => {
+    return new Promise((resolve, reject) => {
+      jsmediatags.read(blob, {
+        onSuccess: function(tag){
+          const pic = tag.tags && tag.tags.picture;
+          if(!pic){ resolve(null); return; }
+          // Convertir los bytes de la imagen a dataURL
+          const bytes = new Uint8Array(pic.data);
+          let binary = '';
+          for(let i=0;i<bytes.byteLength;i++) binary += String.fromCharCode(bytes[i]);
+          const dataUrl = 'data:'+pic.format+';base64,'+btoa(binary);
+          resolve(dataUrl);
+        },
+        onError: function(){ resolve(null); }
+      });
+    });
+  })
+  .then(dataUrl => {
+    _coverPending[fileId] = false;
+    if(dataUrl){
+      _coverCache[fileId] = dataUrl;
+      _applycover(fileId, dataUrl);
+    } else {
+      _coverCache[fileId] = 'none';
+    }
+  })
+  .catch(()=>{ _coverPending[fileId]=false; _coverCache[fileId]='none'; });
+}
+
+function _initCoverObserver(){
+  if(_coverObserver) _coverObserver.disconnect();
+  _coverObserver = new IntersectionObserver((entries)=>{
+    entries.forEach(entry=>{
+      if(entry.isIntersecting){
+        const el = entry.target;
+        const fileId = el.dataset.fid;
+        const accountKey = el.dataset.ak||null;
+        if(fileId && !_coverCache[fileId]){
+          _loadID3Cover(fileId, accountKey);
+        } else if(fileId && _coverCache[fileId] && _coverCache[fileId]!=='none'){
+          _applycover(fileId, _coverCache[fileId]);
+        }
+        _coverObserver.unobserve(el); // unobserve después de cargar
+      }
+    });
+  }, { rootMargin: '200px', threshold: 0 });
+
+  // Observar todos los elementos con data-fid
+  document.querySelectorAll('[data-fid]').forEach(el=>{
+    if(el.dataset.fid) _coverObserver.observe(el);
+  });
+}
+
+// Llamar después de cada render
+const _origRenderAll = window.renderAll;
+window.renderAll = function(){
+  if(_origRenderAll) _origRenderAll();
+  setTimeout(_initCoverObserver, 100);
+};
 
 // ══ BOOT ══
 document.getElementById('welcomeLogoImg').src=LOGO_B64;
