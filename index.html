@@ -3202,8 +3202,10 @@ async function saveGDriveToken(accessToken, expiresIn, refreshToken=null){
       accounts=[{key:row.account_key||'gdrive:legacy',label:row.account_label||'Cuenta anterior',token:row.access_token,expires:row.token_expires_at}];
   }
   // Remove existing entry for this email (will re-add updated)
+  // IMPORTANT: save old refresh_token BEFORE filtering, or it gets lost
+  const _oldRefreshToken = accounts.find(a=>a.key===accountKey)?.refresh_token || null;
   accounts=accounts.filter(a=>a.key!==accountKey);
-  accounts.push({key:accountKey,label:accountEmail,token:accessToken,expires:exp,refresh_token:refreshToken||accounts.find(a=>a.key===accountKey)?.refresh_token||null});
+  accounts.push({key:accountKey,label:accountEmail,token:accessToken,expires:exp,refresh_token:refreshToken||_oldRefreshToken||null});
 
   const tokenJson=JSON.stringify({_multiAccount:true,accounts});
   const upsertData={user_id:currentUser.id,provider:'gdrive',account_key:accountKey,
