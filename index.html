@@ -2462,11 +2462,10 @@ function renderAccounts(){
       +'</div>'
       +'<div style="width:8px;height:8px;border-radius:50%;flex-shrink:0;background:'+(acc.expired?'var(--red)':'var(--green)')+'"></div>'
       +(acc.expired
-        ?'<button class="btn-connect" style="margin-left:12px;width:auto;padding:8px 14px;font-size:0.75rem" onclick="startConnect(\\'gdrive\\')">Reconectar</button>'
-        +'<button class="btn-disconnect" style="margin-left:6px;width:auto;padding:8px 14px;font-size:0.75rem" onclick="disconnectCloud(\\'gdrive\\',\\''+key+'\\')">Desconectar</button>'
-        :'<button class="btn-sync" style="margin-left:12px;width:auto;padding:8px 14px;font-size:0.75rem" onclick="syncCloud(\\'gdrive\\',\\''+key+'\\')">&#x21bb; Sync</button>'
-        +'<button class="btn-disconnect" style="margin-left:6px;width:auto;padding:8px 14px;font-size:0.75rem" onclick="disconnectCloud(\\'gdrive\\',\\''+key+'\\')">Desconectar</button>')
-      +'</div>';
+        ?'<button class="btn-connect" style="margin-left:12px;width:auto;padding:8px 14px;font-size:0.75rem" onclick="startConnect(\'gdrive\')">Reconectar</button>'
+        +'<button class="btn-disconnect" style="margin-left:6px;width:auto;padding:8px 14px;font-size:0.75rem" onclick="disconnectCloud(\'gdrive\',\''+key+'\')">✕ Desconectar</button>'
+        :'<button class="btn-sync" style="margin-left:12px;width:auto;padding:8px 14px;font-size:0.75rem" onclick="syncCloud(\'gdrive\',\''+key+'\')">↻ Sync</button>'
+        +'<button class="btn-disconnect" style="margin-left:6px;width:auto;padding:8px 14px;font-size:0.75rem" onclick="disconnectCloud(\'gdrive\',\''+key+'\')">✕ Desconectar</button>')      +'</div>';
   }).join('')
   +'<div style="margin-top:16px"><button class="btn-connect" style="width:auto;padding:10px 20px" onclick="startConnect(\'gdrive\')">+ Agregar otra cuenta</button></div>';
 }
@@ -2486,11 +2485,10 @@ function renderClouds(){
           +'<div class="cloud-stat-item"><strong>'+cnt+'</strong> canciones</div>'
           +'<div class="cloud-stat-item" style="font-size:.75rem">'+c.desc+'</div></div>'
           +(acc.expired
-            ?'<button class="btn-connect" onclick="startConnect(\\''+c.id+'\\')">Reconectar</button>'
-            +'<button class="btn-disconnect" style="margin-top:7px" onclick="disconnectCloud(\\''+c.id+'\\')">Desconectar</button>'
-            :'<button class="btn-sync" onclick="syncCloud(\\''+c.id+'\\')">&#x21bb; Sincronizar</button>'
-              +'<button class="btn-disconnect" style="margin-top:7px" onclick="disconnectCloud(\\''+c.id+'\\')">Desconectar</button>')
-          +'</div>';
+            ?'<button class="btn-connect" onclick="startConnect(\''+c.id+'\')">Reconectar</button>'
+            +'<button class="btn-disconnect" style="margin-top:7px" onclick="disconnectCloud(\''+c.id+'\')">✕ Desconectar</button>'
+            :'<button class="btn-sync" onclick="syncCloud(\''+c.id+'\')">↻ Sincronizar</button>'
+              +'<button class="btn-disconnect" style="margin-top:7px" onclick="disconnectCloud(\''+c.id+'\')">✕ Desconectar</button>')          +'</div>';
       });
       if(c.id==='gdrive'){
         html+='<div class="cloud-card" style="border-style:dashed;display:flex;align-items:center;justify-content:center;gap:10px;cursor:pointer;min-height:80px;color:var(--accent2)" onclick="startConnect(\'gdrive\')">'
