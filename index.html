@@ -2920,57 +2920,51 @@ function toggleMute(){
 let _tokenRefreshTimers={};
 let _silentRefreshInProgress={};
 
-// ── 1. Silent refresh via hidden iframe — funciona con Google OAuth implícito sin popup ──
-function silentRefreshGDrive(accountKey){
-  return new Promise(resolve=>{
-    if(_silentRefreshInProgress[accountKey]){resolve(null);return;}
-    _silentRefreshInProgress[accountKey]=true;
-    const loginHint=accountKey.replace(/^gdrive:/,'');
-    const nonce=Math.random().toString(36).slice(2);
-    const scope='https://www.googleapis.com/auth/drive.readonly email profile';
-    // Popup minimo con prompt=none — los iframes son bloqueados por Chrome (cookies 3rd party)
-    const url='https://accounts.google.com/o/oauth2/v2/auth'
-      +'?client_id='+encodeURIComponent(GOOGLE_CLIENT_ID)
-      +'&redirect_uri='+encodeURIComponent(GOOGLE_REDIRECT)
-      +'&response_type=token'
-      +'&scope='+encodeURIComponent(scope)
-      +'&state='+encodeURIComponent(JSON.stringify({nonce,provider:'gdrive',silent:true}))
-      +'&prompt=none'
-      +'&login_hint='+encodeURIComponent(loginHint);
-
-    // Popup minimo — evita bloqueo de cookies 3rd party que afecta iframes en Chrome
-    const popup=window.open(url,'_sonatta_refresh','width=1,height=1,top=-100,left=-100,toolbar=no,menubar=no,scrollbars=no,resizable=no');
-
-    function cleanup(result){
-      clearTimeout(timer);
-      window.removeEventListener('message',handler);
-      try{if(popup&&!popup.closed)popup.close();}catch(e){}
-      delete _silentRefreshInProgress[accountKey];
-      resolve(result);
-    }
-
-    // Timeout de 15 seg
-    const timer=setTimeout(()=>{
-      console.warn('⏱ Silent refresh timeout for',accountKey);
-      cleanup(null);
-    },15000);
-
-    function handler(ev){
-      if(ev.origin!==window.location.origin)return;
-      const msg=ev.data; if(!msg)return;
-      if(msg.type==='gdrive_token'&&msg.nonce===nonce) cleanup(msg);
-      else if(msg.type==='gdrive_token_error'&&msg.nonce===nonce) cleanup(null);
-    }
-    window.addEventListener('message',handler);
-
-    // Si el popup fue bloqueado por el navegador — fallar para mostrar el banner
-    setTimeout(()=>{
-      if(!popup||popup.closed){
-        console.warn('Popup bloqueado por el navegador para',accountKey);
-        cleanup(null);
+// Silent refresh via /api/refresh-token (server-side, usa refresh_token permanente)
+async function silentRefreshGDrive(accountKey){
+  if(_silentRefreshInProgress[accountKey]) return null;
+  _silentRefreshInProgress[accountKey]=true;
+  try{
+    // Obtener el refresh_token guardado en Supabase para esta cuenta
+    const{data:cd}=await _supabase.from('cloud_connections')
+      .select('access_token').eq('user_id',currentUser.id).eq('provider','gdrive').limit(1);
+    const row=cd&&cd[0]; if(!row){delete _silentRefreshInProgress[accountKey];return null;}
+    let refreshToken=null;
+    try{
+      const p=JSON.parse(row.access_token);
+      if(p&&p._multiAccount&&Array.isArray(p.accounts)){
+        const acc=p.accounts.find(a=>a.key===accountKey)||p.accounts[p.accounts.length-1];
+        if(acc) refreshToken=acc.refresh_token;
+      } else if(p.refresh_token){
+        refreshToken=p.refresh_token;
       }
-    },800);
-  });
+    }catch(e){ refreshToken=null; }
+    if(!refreshToken){
+      console.warn('No hay refresh_token para',accountKey,'-- el usuario debe reconectar una vez');
+      delete _silentRefreshInProgress[accountKey];
+      return null;
+    }
+    // Llamar al Edge Function en Vercel (tiene el client_secret de forma segura)
+    const{data:{session}}=await _supabase.auth.getSession();
+    const supaToken=session?.access_token||'';
+    const res=await fetch('/api/refresh-token',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+supaToken},
+      body:JSON.stringify({refresh_token:refreshToken})
+    });
+    const data=await res.json();
+    delete _silentRefreshInProgress[accountKey];
+    if(data.access_token){
+      console.log('\u2705 Token renovado automaticamente para',accountKey);
+      return {token:data.access_token, expiresIn:data.expires_in||3600};
+    }
+    console.warn('Refresh fallido para',accountKey,':',data.error);
+    return null;
+  }catch(e){
+    console.error('silentRefreshGDrive error:',e);
+    delete _silentRefreshInProgress[accountKey];
+    return null;
+  }
 }
 
 // ── 2. Update token in memory + Supabase WITHOUT rescanning Drive ──
@@ -2998,9 +2992,9 @@ async function updateGDriveTokenOnly(accountKey,newToken,expiresIn){
   }catch(e){console.error('updateGDriveTokenOnly:',e);return false;}
 }
 
-// ── 3. Try silent popup refresh → if fails, fallback banner ──
+// ── 3. Try silent iframe refresh → if fails, try small visible popup → fallback banner ──
 async function autoRefreshToken(accountKey,label){
-  console.log('🔄 Silent refresh attempt (popup) for',label||accountKey);
+  console.log('🔄 Silent refresh attempt (iframe) for',label||accountKey);
   const result=await silentRefreshGDrive(accountKey);
   if(result&&result.token){
     await updateGDriveTokenOnly(accountKey,result.token,result.expiresIn||3600);
@@ -3076,10 +3070,11 @@ function connectGDrivePopup(){
   const url='https://accounts.google.com/o/oauth2/v2/auth'
     +'?client_id='+encodeURIComponent(GOOGLE_CLIENT_ID)
     +'&redirect_uri='+encodeURIComponent(GOOGLE_REDIRECT)
-    +'&response_type=token'
+    +'&response_type=code'
+    +'&access_type=offline'
     +'&scope='+encodeURIComponent(scope)
     +'&state='+encodeURIComponent(JSON.stringify({nonce,provider:'gdrive'}))
-    +'&prompt=select_account';
+    +'&prompt='+encodeURIComponent('select_account consent');
   const w=520,h=620,l=Math.round(screen.width/2-w/2),t=Math.round(screen.height/2-h/2);
   _oauthPopup=window.open(url,'SonattaOAuth','width='+w+',height='+h+',left='+l+',top='+t+',toolbar=no,menubar=no');
   if(!_oauthPopup){toast('⚠ Popup bloqueado. Permite popups e intenta de nuevo.');return;}
@@ -3091,49 +3086,94 @@ function connectGDrivePopup(){
 }
 async function _oauthMsg(ev){
   if(ev.origin!==window.location.origin) return;
-  const msg=ev.data; if(!msg||msg.type!=='gdrive_token') return;
+  const msg=ev.data; if(!msg||(msg.type!=='gdrive_token'&&msg.type!=='gdrive_code')) return;
   clearTimeout(_oauthInterval); window.removeEventListener('message',_oauthMsg);
-  // Safely try to close popup — wrapped in try/catch for COOP
   try{ if(_oauthPopup) _oauthPopup.close(); }catch(e){}
   const saved=sessionStorage.getItem('gdrive_oauth_nonce');
   sessionStorage.removeItem('gdrive_oauth_nonce');
-  if(msg.nonce!==saved){toast('⚠ Error de seguridad');return;}
-  await saveGDriveToken(msg.token,msg.expiresIn);
+  if(msg.nonce!==saved){toast('Error de seguridad');return;}
+  if(msg.type==='gdrive_code'){
+    // Intercambiar el code por access_token + refresh_token via Edge Function
+    toast('Conectando...');
+    const{data:{session}}=await _supabase.auth.getSession();
+    const supaToken=session?.access_token||'';
+    try{
+      const res=await fetch('/api/exchange-code',{
+        method:'POST',
+        headers:{'Content-Type':'application/json','Authorization':'Bearer '+supaToken},
+        body:JSON.stringify({code:msg.code,redirect_uri:GOOGLE_REDIRECT})
+      });
+      const data=await res.json();
+      if(!data.access_token){toast('Error al conectar: '+(data.error||'desconocido'));return;}
+      await saveGDriveToken(data.access_token, data.expires_in||3600, data.refresh_token);
+    }catch(e){toast('Error de conexion: '+e.message);}
+  } else {
+    // Fallback: token directo (no deberia pasar con el nuevo flujo)
+    await saveGDriveToken(msg.token,msg.expiresIn,null);
+  }
 }
 async function detectCloudCallback(){
-  const hash=window.location.hash; if(!hash.includes('access_token')) return false;
-  const p=new URLSearchParams(hash.replace('#',''));
-  const token=p.get('access_token'), exp=parseInt(p.get('expires_in')||'3600'), stRaw=p.get('state');
+  // response_type=code => Google redirige con ?code=... en query string
+  const search=window.location.search;
+  const hash=window.location.hash;
+  const hasCode=search.includes('code=');
+  const hasToken=hash.includes('access_token=');
+  if(!hasCode&&!hasToken) return false;
   window.history.replaceState({},document.title,window.location.pathname);
-  if(!token) return false;
-  let state={}; try{state=JSON.parse(decodeURIComponent(stRaw||'{}'));}catch{}
-  if(state.provider!=='gdrive') return false;
-  // Popup flow
-  if(window.opener&&!window.opener.closed){
-    window.opener.postMessage({type:'gdrive_token',token,expiresIn:exp,nonce:state.nonce},window.location.origin);
-    window.close(); return true;
-  }
-  // Silent iframe flow — post to parent without closing (used by silentRefreshGDrive)
-  if(window.parent&&window.parent!==window){
-    if(hasHash){
-      window.parent.postMessage({type:'gdrive_token',token,expiresIn:exp,nonce:state.nonce},window.location.origin);
-    } else if(hasError&&state.silent){
-      const p2=new URLSearchParams(hash.replace('#',''));
-      window.parent.postMessage({type:'gdrive_token_error',error:p2.get('error'),nonce:state.nonce},window.location.origin);
+
+  if(hasCode){
+    const p=new URLSearchParams(search.replace('?',''));
+    const code=p.get('code'), stRaw=p.get('state');
+    if(!code) return false;
+    let state={}; try{state=JSON.parse(decodeURIComponent(stRaw||'{}'));}catch{}
+    if(state.provider!=='gdrive') return false;
+    if(window.opener&&!window.opener.closed){
+      window.opener.postMessage({type:'gdrive_code',code,nonce:state.nonce},window.location.origin);
+      window.close(); return true;
     }
+    // Sin popup (redirect directo) -- intercambiar aqui mismo
+    const nonce=sessionStorage.getItem('gdrive_oauth_nonce');
+    if(state.nonce&&state.nonce!==nonce){toast('Sesion expirada.');return false;}
+    sessionStorage.removeItem('gdrive_oauth_nonce');
+    const{data:{session}}=await _supabase.auth.getSession();
+    const supaToken=session?.access_token||'';
+    try{
+      const res=await fetch('/api/exchange-code',{
+        method:'POST',
+        headers:{'Content-Type':'application/json','Authorization':'Bearer '+supaToken},
+        body:JSON.stringify({code,redirect_uri:GOOGLE_REDIRECT})
+      });
+      const data=await res.json();
+      if(!data.access_token){toast('Error al conectar: '+(data.error||'?'));return false;}
+      await saveGDriveToken(data.access_token,data.expires_in||3600,data.refresh_token);
+    }catch(e){toast('Error: '+e.message); return false;}
     return true;
   }
-  const nonce=sessionStorage.getItem('gdrive_oauth_nonce');
-  if(state.nonce&&state.nonce!==nonce){toast('⚠ Sesión expirada.');return false;}
-  sessionStorage.removeItem('gdrive_oauth_nonce');
-  await saveGDriveToken(token,exp); return true;
+
+  // Fallback token implicito (legacy)
+  if(hasToken){
+    const p=new URLSearchParams(hash.replace('#',''));
+    const token=p.get('access_token'), exp=parseInt(p.get('expires_in')||'3600'), stRaw=p.get('state');
+    if(!token) return false;
+    let state={}; try{state=JSON.parse(decodeURIComponent(stRaw||'{}'));}catch{}
+    if(state.provider!=='gdrive') return false;
+    if(window.opener&&!window.opener.closed){
+      window.opener.postMessage({type:'gdrive_token',token,expiresIn:exp,nonce:state.nonce},window.location.origin);
+      window.close(); return true;
+    }
+    const nonce=sessionStorage.getItem('gdrive_oauth_nonce');
+    if(state.nonce&&state.nonce!==nonce){toast('Sesion expirada.');return false;}
+    sessionStorage.removeItem('gdrive_oauth_nonce');
+    await saveGDriveToken(token,exp,null); return true;
+  }
+  return false;
 }
 
 // FIX 2: Support multiple GDrive accounts
 // The DB schema (user_id+provider unique) means only 1 row per provider.
 // To truly support multiple accounts we need to ALTER the table.
 // For now: save with upsert (updates token), but APPEND songs (don't delete old ones).
-async function saveGDriveToken(accessToken, expiresIn){
+async function saveGDriveToken(accessToken, expiresIn, refreshToken=null){
   toast('⏳ Conectando Google Drive...');
   const exp=new Date(Date.now()+expiresIn*1000).toISOString();
 
@@ -3162,7 +3202,7 @@ async function saveGDriveToken(accessToken, expiresIn){
   }
   // Remove existing entry for this email (will re-add updated)
   accounts=accounts.filter(a=>a.key!==accountKey);
-  accounts.push({key:accountKey,label:accountEmail,token:accessToken,expires:exp});
+  accounts.push({key:accountKey,label:accountEmail,token:accessToken,expires:exp,refresh_token:refreshToken||accounts.find(a=>a.key===accountKey)?.refresh_token||null});
 
   const tokenJson=JSON.stringify({_multiAccount:true,accounts});
   const upsertData={user_id:currentUser.id,provider:'gdrive',account_key:accountKey,
