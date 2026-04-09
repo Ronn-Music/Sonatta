@@ -2078,15 +2078,29 @@ function _hideLoadingOverlay(){
 }
 
 function _mapSongs(data){
-  return data.map(s=>({
-    id:s.id, title:s.title||'Sin título', artist:s.artist||'Desconocido',
-    album: (s.album&&s.album!=='Google Drive') ? s.album : 'Sin álbum',
-    duration:s.duration?fmt(s.duration):'0:00',
-    cloud:s.cloud_provider||'gdrive',
-    accountKey:s.account_key||null,
-    fileUrl:s.file_url||null, filePath:s.file_path||null,
-    liked:s.liked||false, coverUrl:s.cover_url||null
-  }));
+  return data.map(s=>{
+    // Extraer fileId del filePath para construir thumbnail autenticado
+    let fileId=null;
+    if(s.file_path){
+      const parts=s.file_path.split(':');
+      const last=parts[parts.length-1];
+      if(last&&last.length>20&&/^[a-zA-Z0-9_-]+$/.test(last)) fileId=last;
+    }
+    if(!fileId&&s.file_url){
+      const m=s.file_url.match(/\/files\/([a-zA-Z0-9_-]{20,})/);
+      if(m) fileId=m[1];
+    }
+    return {
+      id:s.id, title:s.title||'Sin título', artist:s.artist||'Desconocido',
+      album:(s.album&&s.album!=='Google Drive')?s.album:'Sin álbum',
+      duration:s.duration?fmt(s.duration):'0:00',
+      cloud:s.cloud_provider||'gdrive',
+      accountKey:s.account_key||null,
+      fileUrl:s.file_url||null, filePath:s.file_path||null,
+      liked:s.liked||false, coverUrl:s.cover_url||null,
+      fileId:fileId
+    };
+  });
 }
 
 async function loadPlaylists(){
@@ -2115,11 +2129,20 @@ function updateStats(){
 }
 
 // ══ RENDER ══
+function _getThumbUrl(song){
+  if(song.coverUrl) return song.coverUrl;
+  if(song.fileId&&song.cloud==='gdrive'){
+    const tok=connectedClouds['_tok_'+(song.accountKey||'')]||connectedClouds['_tok_gdrive']||connectedClouds['_tok_'+(song.cloud||'gdrive')];
+    if(tok) return 'https://www.googleapis.com/drive/v3/files/'+song.fileId+'/thumbnail?access_token='+encodeURIComponent(tok);
+  }
+  return null;
+}
 function artStyle(song){
-  if(song.coverUrl) return 'background:url('+JSON.stringify(song.coverUrl)+') center/cover no-repeat';
+  const url=_getThumbUrl(song);
+  if(url) return 'background:url('+JSON.stringify(url)+') center/cover no-repeat';
   return 'background:'+artistColor(song.artist);
 }
-function artInitial(song){ return song.coverUrl?'':((song.artist||'?').charAt(0).toUpperCase()); }
+function artInitial(song){ return _getThumbUrl(song)?'':((song.artist||'?').charAt(0).toUpperCase()); }
 
 function songRowHTML(song, idx){
   const cl={gdrive:'Drive',onedrive:'OneDrive',dropbox:'Dropbox',box:'Box',s3:'S3',pcloud:'pCloud'};
@@ -2335,7 +2358,7 @@ function _renderAlbumChunked(arr, el, from){
   for(let i=from;i<to;i++){
     const s=arr[i];
     html+='<div class="album-card" data-songid="'+s.id+'">'
-      +'<div class="album-art" style="'+artStyle(s)+';display:flex;align-items:center;justify-content:center;font-size:2.2rem;font-weight:800;color:rgba(255,255,255,0.2)">'+(s.coverUrl?'':((s.album||'?').charAt(0).toUpperCase()))+'</div>'
+      +'<div class="album-art" style="'+artStyle(s)+';display:flex;align-items:center;justify-content:center;font-size:2.2rem;font-weight:800;color:rgba(255,255,255,0.2)">'+(_getThumbUrl(s)?'':((s.album||'?').charAt(0).toUpperCase()))+'</div>'
       +'<div class="album-info"><div class="album-name">'+s.album+'</div><div class="album-artist">'+s.artist+'</div><div class="album-count">'+s.count+' canción'+(s.count!==1?'es':'')+'</div></div>'
       +'</div>';
   }
@@ -2415,7 +2438,6 @@ function renderClouds(){
           +(acc.expired
             ?'<button class="btn-connect" onclick="startConnect(\''+c.id+'\')">Reconectar</button>'
             :'<button class="btn-sync" onclick="syncCloud(\''+c.id+'\')">↻ Sincronizar</button>'
-              +'<button class="btn-sync" style="margin-top:7px;background:linear-gradient(135deg,#7c5cfc,#a78bfa)" onclick="repairCovers()">🖼 Reparar Carátulas</button>'
               +'<button class="btn-disconnect" style="margin-top:7px" onclick="disconnectCloud(\''+c.id+'\')">Desconectar</button>')
           +'</div>';
       });
@@ -2484,10 +2506,11 @@ function syncNpModal(){
   // Remove old img if any
   const oldImg=cover.querySelector('img');
   if(oldImg) oldImg.remove();
-  if(song.coverUrl){
+  const _npModalThumb=_getThumbUrl(song);
+  if(_npModalThumb){
     init.style.display='none';
     const img=document.createElement('img');
-    img.src=song.coverUrl;
+    img.src=_npModalThumb;
     img.onerror=()=>{ img.remove(); init.style.display='flex'; init.textContent=(song.artist||'?').charAt(0).toUpperCase(); cover.style.background=artistColor(song.artist); };
     cover.insertBefore(img,cover.firstChild);
     cover.style.background='';
@@ -2592,7 +2615,7 @@ async function playSongById(id){
   document.getElementById('npTitle').textContent=song.title;
   document.getElementById('npArtist').textContent=song.artist;
   const npArt=document.getElementById('npArt');
-  if(song.coverUrl){ npArt.style.background='url('+JSON.stringify(song.coverUrl)+') center/cover no-repeat'; npArt.textContent=''; }
+  const _npThumb=_getThumbUrl(song); if(_npThumb){ npArt.style.background='url('+JSON.stringify(_npThumb)+') center/cover no-repeat'; npArt.textContent=''; }
   else { npArt.style.background=artistColor(song.artist); npArt.textContent=(song.artist||'?').charAt(0).toUpperCase(); }
   document.getElementById('npHeart').textContent=song.liked?'♥':'♡';
   document.getElementById('npHeart').classList.toggle('liked',song.liked);
@@ -3130,7 +3153,7 @@ async function scanGDrive(token, accountKey, deleteFirst=true){
     do {
       let url='https://www.googleapis.com/drive/v3/files'
         +'?q='+encodeURIComponent(tipos)
-        +'&fields='+encodeURIComponent('nextPageToken,files(id,name,mimeType,hasThumbnail)')
+        +'&fields='+encodeURIComponent('nextPageToken,files(id,name,mimeType)')
         +'&pageSize=1000';
       if(pageToken) url+='&pageToken='+encodeURIComponent(pageToken);
       toast('⏳ Escaneando pág '+pagina+'...');
@@ -3165,21 +3188,17 @@ async function scanGDrive(token, accountKey, deleteFirst=true){
         const titulo=partes.length>1?partes.slice(1).join(' - ').trim():nombre;
         let album='Sin álbum';
         if(partes.length>=3){ album=partes[1].trim(); }
-        const coverUrl = file.hasThumbnail
-          ? 'https://drive.google.com/thumbnail?id='+file.id+'&sz=w400'
-          : null;
         return {
           user_id:currentUser.id, title:titulo, artist:artista, album:album,
           duration:0,
           file_path:(accountKey||'gdrive')+':'+file.id,
+          // URL limpia — playSongById construye la URL final con ?alt=media + token
           file_url:'https://www.googleapis.com/drive/v3/files/'+file.id,
           cloud_provider:'gdrive',
-          account_key: accountKey||'gdrive',
-          cover_url: coverUrl
+          account_key: accountKey||'gdrive'
         };
       });
-      // ignoreDuplicates:false => actualiza cover_url en registros existentes
-      const{error}=await _supabase.from('songs').upsert(rows,{onConflict:'user_id,file_path',ignoreDuplicates:false});
+      const{error}=await _supabase.from('songs').upsert(rows,{onConflict:'user_id,file_path',ignoreDuplicates:true});
       if(error) console.error('Lote '+i+':',error.message); else saved+=lote.length;
       if(i%(BATCH*5)===0&&i>0) toast('⏳ '+saved+'/'+allFiles.length+'...');
     }
@@ -3311,74 +3330,6 @@ function mobileNav(view, btn){
     }
   };
 })();
-
-// ══ REPAIR COVERS — actualiza cover_url en canciones ya existentes usando el file ID ══
-async function repairCovers(){
-  const accounts = connectedClouds._accounts||[];
-  const gdriveAccs = accounts.filter(a=>a.provider==='gdrive'&&!a.expired);
-  if(!gdriveAccs.length){ toast('⚠ No hay cuentas de Google Drive activas'); return; }
-
-  let totalFixed=0, totalChecked=0;
-  toast('⏳ Buscando canciones sin carátula...');
-
-  for(const acc of gdriveAccs){
-    const token = connectedClouds['_tok_'+acc.account_key] || connectedClouds['_tok_gdrive'];
-    if(!token){ toast('⚠ Sin token para '+acc.account_label); continue; }
-
-    // Cargar todas las canciones de esta cuenta que no tienen cover_url
-    let from=0; const PAGE=1000;
-    let batch=[];
-    do {
-      const {data} = await _supabase.from('songs')
-        .select('id,file_path')
-        .eq('user_id',currentUser.id)
-        .eq('account_key',acc.account_key)
-        .is('cover_url',null)
-        .range(from, from+PAGE-1);
-      if(!data||!data.length) break;
-      batch = batch.concat(data);
-      from += PAGE;
-      if(data.length < PAGE) break;
-    } while(true);
-
-    if(!batch.length){ toast('✓ '+acc.account_label+': todas las canciones ya tienen carátula'); continue; }
-    toast('⏳ '+acc.account_label+': verificando '+batch.length+' canciones...');
-
-    // Para cada canción, extraer el file ID del file_path y consultar Drive
-    const CHUNK = 50;
-    for(let i=0; i<batch.length; i+=CHUNK){
-      const chunk = batch.slice(i, i+CHUNK);
-      // Construir query de Drive para obtener hasThumbnail de estos IDs
-      const ids = chunk.map(s=>s.file_path.split(':').pop());
-      const q = ids.map(id=>"'"+id+"' in parents or id='"+id+"'").join(' or ');
-      // Usar files.get por lotes — Drive no tiene batch nativo en v3, usamos Promise.all
-      const results = await Promise.all(ids.map(async (fileId, idx) => {
-        try {
-          const r = await fetch(
-            'https://www.googleapis.com/drive/v3/files/'+fileId+'?fields=id,hasThumbnail',
-            {headers:{Authorization:'Bearer '+token}}
-          );
-          const d = await r.json();
-          return {songId: chunk[idx].id, fileId, hasThumbnail: d.hasThumbnail||false};
-        } catch(e){ return {songId: chunk[idx].id, fileId, hasThumbnail:false}; }
-      }));
-
-      // Actualizar los que tienen thumbnail
-      const toUpdate = results.filter(r=>r.hasThumbnail);
-      for(const r of toUpdate){
-        const coverUrl = 'https://drive.google.com/thumbnail?id='+r.fileId+'&sz=w400';
-        await _supabase.from('songs').update({cover_url:coverUrl}).eq('id',r.songId);
-        totalFixed++;
-      }
-      totalChecked += chunk.length;
-      if(i%(CHUNK*4)===0&&i>0) toast('⏳ '+totalFixed+' carátulas encontradas de '+totalChecked+' revisadas...');
-    }
-  }
-
-  await loadSongsFromDB();
-  renderAll();
-  toast('✓ Reparación lista — '+totalFixed+' carátulas actualizadas');
-}
 
 // ══ BOOT ══
 document.getElementById('welcomeLogoImg').src=LOGO_B64;
