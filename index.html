@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Sonatta — Tu música en las nubes</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jsmediatags/3.9.5/jsmediatags.min.js"></script>
-<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&family=Syne:wght@400;600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,300&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&family=Syne:wght@400;600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,300&family=Playfair+Display:wght@700;800&display=swap" rel="stylesheet">
 <style>
   :root {
     --bg: #0a0a0f;
@@ -256,21 +256,19 @@
 
   /* Nombre de la app */
   .welcome-app-name {
-    font-family: 'Cormorant Garamond', 'Syne', serif;
+    font-family: 'Playfair Display', 'Georgia', serif;
     font-size: 3.6rem;
-    font-weight: 300;
-    letter-spacing: 8px;
-    text-transform: uppercase;
+    font-weight: 700;
+    letter-spacing: 3px;
     color: #f5f0e8;
     margin-bottom: 4px;
     line-height: 1;
     animation: wsc-float-up 0.9s cubic-bezier(0.22,1,0.36,1) 0.15s both;
-    /* Efecto shimmer sutil en hover */
-    background: linear-gradient(90deg, #e8dfc8 0%, #ffffff 40%, #d4af37 55%, #e8dfc8 100%);
-    background-size: 200% auto;
+    background: linear-gradient(to right, #0d2464 0%, #0d2464 30%, #7a2800 62%, #fc4b08 100%);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
+    filter: drop-shadow(0 0 18px rgba(252,75,8,0.18));
   }
 
   /* Línea decorativa bajo el nombre */
@@ -443,11 +441,14 @@
     box-shadow: 0 0 0 3px rgba(167,139,250,0.25), 0 6px 20px rgba(124,92,252,0.35);
   }
   .auth-screen-logo span {
-    font-family: 'Nunito', sans-serif;
-    font-size: 1.6rem;
-    font-weight: 900;
-    color: #ee9c36;
-    letter-spacing: -0.5px;
+    font-family: 'Playfair Display', Georgia, serif;
+    font-size: 1.8rem;
+    font-weight: 700;
+    letter-spacing: 1px;
+    background: linear-gradient(to right, #0d2464 0%, #0d2464 30%, #7a2800 62%, #fc4b08 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
   }
   .auth-card {
     background: rgba(255,255,255,0.05);
@@ -655,11 +656,14 @@
     object-fit: cover;
   }
   .sidebar-logo-name {
-    font-family: 'Nunito', sans-serif;
+    font-family: 'Playfair Display', Georgia, serif;
     font-size: 1.2rem;
-    font-weight: 900;
-    color: #ee9c36;
-    letter-spacing: -0.3px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    background: linear-gradient(to right, #0d2464 0%, #0d2464 30%, #7a2800 62%, #fc4b08 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
   }
 
   .sidebar-section { padding: 14px 0; border-bottom: 1px solid var(--border); }
@@ -1111,7 +1115,14 @@
   }
   .mobile-topbar-logo img { width:28px;height:28px;border-radius:50%;object-fit:cover; }
   .mobile-topbar-logo span {
-    font-family:'Nunito',sans-serif;font-size:1.1rem;font-weight:900;color:#ee9c36;
+    font-family: 'Playfair Display', Georgia, serif;
+    font-size: 1.1rem;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    background: linear-gradient(to right, #0d2464 0%, #0d2464 30%, #7a2800 62%, #fc4b08 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
   }
   .mobile-menu-btn {
     background:none;border:none;color:var(--text2);cursor:pointer;
@@ -1839,14 +1850,33 @@ function showView(name, navEl){
 // ══ AUTH ══
 async function handleLogin(e){
   e.preventDefault();
-  const email=document.getElementById('loginEmail').value;
+  const email=document.getElementById('loginEmail').value.trim();
   const pass=document.getElementById('loginPass').value;
   const errEl=document.getElementById('loginError'), btn=document.getElementById('loginBtn');
   errEl.textContent=''; btn.disabled=true; btn.textContent='Iniciando sesión...';
-  const{data,error}=await _supabase.auth.signInWithPassword({email,password:pass});
-  btn.disabled=false; btn.textContent='Iniciar sesión';
-  if(error){errEl.textContent='Correo o contraseña incorrectos'; return;}
-  loginSuccess(data.user);
+  try {
+    const{data,error}=await _supabase.auth.signInWithPassword({email,password:pass});
+    btn.disabled=false; btn.textContent='Iniciar sesión';
+    if(error){
+      if(error.message&&error.message.toLowerCase().includes('email not confirmed')){
+        errEl.textContent='Correo no confirmado. Revisa tu bandeja de entrada.';
+      } else if(error.message&&(error.message.toLowerCase().includes('invalid')||error.message.toLowerCase().includes('credentials'))){
+        errEl.textContent='Correo o contraseña incorrectos.';
+      } else {
+        errEl.textContent=error.message||'Error al iniciar sesión. Intenta de nuevo.';
+      }
+      return;
+    }
+    if(!data||!data.user){
+      errEl.textContent='No se pudo iniciar sesión. Intenta de nuevo.';
+      return;
+    }
+    loginSuccess(data.user);
+  } catch(ex){
+    btn.disabled=false; btn.textContent='Iniciar sesión';
+    errEl.textContent='Error de conexión: '+(ex.message||'Intenta de nuevo.');
+    console.error('handleLogin error:', ex);
+  }
 }
 async function handleRegister(e){
   e.preventDefault();
@@ -1869,6 +1899,8 @@ async function handleRegister(e){
   showScreen('verifyScreen');
 }
 function loginSuccess(user){
+  // Guardia contra doble ejecución (handleLogin + onAuthStateChange)
+  if(!user || currentUser) return;
   currentUser={
     id:user.id,
     name:user.user_metadata?.name||user.user_metadata?.full_name||user.email.split('@')[0],
@@ -1895,7 +1927,7 @@ function loginSuccess(user){
   });
 }
 async function logout(){
-  await _supabase.auth.signOut(); currentUser=null; stopProg();
+  await _supabase.auth.signOut(); currentUser=null; songs=[]; connectedClouds={}; playlists=[]; stopProg();
   document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
   document.getElementById('welcomeScreen').classList.add('active');
 }
