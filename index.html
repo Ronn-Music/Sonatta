@@ -3065,7 +3065,7 @@ function startConnect(id){
 }
 function connectGDrivePopup(){
   const nonce=Math.random().toString(36).slice(2);
-  sessionStorage.setItem('gdrive_oauth_nonce',nonce);
+  localStorage.setItem('gdrive_oauth_nonce',nonce);
   const scope='https://www.googleapis.com/auth/drive.readonly email profile';
   const url='https://accounts.google.com/o/oauth2/v2/auth'
     +'?client_id='+encodeURIComponent(GOOGLE_CLIENT_ID)
@@ -3089,8 +3089,8 @@ async function _oauthMsg(ev){
   const msg=ev.data; if(!msg||(msg.type!=='gdrive_token'&&msg.type!=='gdrive_code')) return;
   clearTimeout(_oauthInterval); window.removeEventListener('message',_oauthMsg);
   try{ if(_oauthPopup) _oauthPopup.close(); }catch(e){}
-  const saved=sessionStorage.getItem('gdrive_oauth_nonce');
-  sessionStorage.removeItem('gdrive_oauth_nonce');
+  const saved=localStorage.getItem('gdrive_oauth_nonce');
+  localStorage.removeItem('gdrive_oauth_nonce');
   if(msg.nonce!==saved){toast('Error de seguridad');return;}
   if(msg.type==='gdrive_code'){
     // Intercambiar el code por access_token + refresh_token via Edge Function
@@ -3133,9 +3133,9 @@ async function detectCloudCallback(){
       window.close(); return true;
     }
     // Sin popup (redirect directo) -- intercambiar aqui mismo
-    const nonce=sessionStorage.getItem('gdrive_oauth_nonce');
+    const nonce=localStorage.getItem('gdrive_oauth_nonce');
     if(state.nonce&&state.nonce!==nonce){toast('Sesion expirada.');return false;}
-    sessionStorage.removeItem('gdrive_oauth_nonce');
+    localStorage.removeItem('gdrive_oauth_nonce');
     const{data:{session}}=await _supabase.auth.getSession();
     const supaToken=session?.access_token||'';
     try{
@@ -3162,9 +3162,9 @@ async function detectCloudCallback(){
       window.opener.postMessage({type:'gdrive_token',token,expiresIn:exp,nonce:state.nonce},window.location.origin);
       window.close(); return true;
     }
-    const nonce=sessionStorage.getItem('gdrive_oauth_nonce');
+    const nonce=localStorage.getItem('gdrive_oauth_nonce');
     if(state.nonce&&state.nonce!==nonce){toast('Sesion expirada.');return false;}
-    sessionStorage.removeItem('gdrive_oauth_nonce');
+    localStorage.removeItem('gdrive_oauth_nonce');
     await saveGDriveToken(token,exp,null); return true;
   }
   return false;
