@@ -2411,15 +2411,37 @@ function _hideLoadingOverlay(){
 function _mapSongs(data){
   return data.map(s=>{
     let fileId=null;
+
+    // Intentar extraer fileId de file_path en todos los formatos posibles:
+    // "gdrive:FILE_ID"
+    // "gdrive:email@gmail.com:FILE_ID"
+    // "gdrive:gdrive:email@gmail.com:FILE_ID"
+    // simplemente "FILE_ID"
     if(s.file_path){
       const parts=s.file_path.split(':');
-      const last=parts[parts.length-1];
-      if(last&&last.length>20&&/^[a-zA-Z0-9_-]+$/.test(last)) fileId=last;
+      // Buscar cualquier segmento que parezca un Google Drive file ID (alfanumérico, guiones, >15 chars)
+      for(let i=parts.length-1;i>=0;i--){
+        const seg=parts[i];
+        if(seg&&seg.length>=15&&/^[a-zA-Z0-9_-]+$/.test(seg)&&!seg.includes('@')&&!seg.includes('.')){
+          fileId=seg;
+          break;
+        }
+      }
     }
+
+    // Fallback: extraer de file_url
     if(!fileId&&s.file_url){
-      const m=s.file_url.match(/\/files\/([a-zA-Z0-9_-]{20,})/);
+      // https://www.googleapis.com/drive/v3/files/FILE_ID
+      const m=s.file_url.match(/\/files\/([a-zA-Z0-9_-]{15,})/);
       if(m) fileId=m[1];
     }
+
+    // Fallback: extraer de file_url con ?id=
+    if(!fileId&&s.file_url){
+      const m=s.file_url.match(/[?&]id=([a-zA-Z0-9_-]{15,})/);
+      if(m) fileId=m[1];
+    }
+
     return {
       id:s.id, title:s.title||'Sin título', artist:s.artist||'Desconocido',
       album:(s.album&&s.album!=='Google Drive')?s.album:'Sin álbum',
@@ -4184,11 +4206,29 @@ async function startCoverSync(){
   const label = document.getElementById('coverSyncLabel');
   const pct = document.getElementById('coverSyncPct');
 
-  // Canciones sin carátula guardada y con fileId válido
-  const pending = songs.filter(s => !s.coverUrl && s.fileId);
-  if(!pending.length){
-    status.style.display='block';
-    status.innerHTML='✅ <b>Todas las canciones ya tienen carátula guardada.</b> No hay nada que sincronizar.';
+  status.style.display='block';
+
+  // Diagnóstico previo
+  const total = songs.length;
+  const conCaratula = songs.filter(s=>s.coverUrl).length;
+  const sinCaratula = songs.filter(s=>!s.coverUrl).length;
+  const conFileId = songs.filter(s=>!s.coverUrl && s.fileId).length;
+  const sinFileId = songs.filter(s=>!s.coverUrl && !s.fileId).length;
+
+  status.innerHTML = `📊 <b>Diagnóstico:</b><br>
+    · Total canciones: <b>${total}</b><br>
+    · Ya tienen carátula guardada: <b>${conCaratula}</b><br>
+    · Sin carátula + con fileId (se pueden procesar): <b>${conFileId}</b><br>
+    · Sin carátula + sin fileId (no procesables): <b>${sinFileId}</b>`;
+
+  if(sinFileId > 0){
+    status.innerHTML += `<br><br>⚠️ <b>${sinFileId} canciones</b> no tienen ID de archivo de Drive válido. 
+    Ejemplo de file_path: <code style="font-size:0.7rem;color:var(--accent2)">${songs.find(s=>!s.fileId)?.filePath||'—'}</code><br>
+    Haz clic en <b>↻ Sync</b> en tu cuenta de Google Drive para re-escanear.`;
+  }
+
+  if(!conFileId){
+    status.innerHTML += '<br><br>✅ No hay canciones procesables pendientes.';
     return;
   }
 
@@ -4197,27 +4237,24 @@ async function startCoverSync(){
     .map(k=>connectedClouds[k])[0] || null;
 
   if(!token){
-    status.style.display='block';
-    status.innerHTML='⚠️ No hay cuenta de nube conectada. Conecta Google Drive primero.';
+    status.innerHTML += '<br><br>⚠️ No hay token de Google Drive activo. Reconecta tu cuenta.';
     return;
   }
+
+  const pending = songs.filter(s => !s.coverUrl && s.fileId);
 
   _syncRunning = true;
   _syncStop = false;
   btn.disabled = true;
   btn.style.opacity = '0.5';
   stopBtn.style.display = 'inline-block';
-  status.style.display = 'block';
   bar.style.display = 'block';
 
   let found = 0, failed = 0, done = 0;
-  const total = pending.length;
-
-  status.innerHTML = `⏳ Iniciando... <b>${total}</b> canciones sin carátula encontradas.`;
 
   // Procesar en lotes de 3 simultáneas
   const BATCH = 3;
-  for(let i = 0; i < total; i += BATCH){
+  for(let i = 0; i < pending.length; i += BATCH){
     if(_syncStop) break;
     const batch = pending.slice(i, i + BATCH);
 
@@ -4246,9 +4283,7 @@ async function startCoverSync(){
           found++;
           song.coverUrl = dataUrl;
           _coverCache[song.fileId] = dataUrl;
-          // Guardar en Supabase
           await _supabase.from('songs').update({cover_url: dataUrl}).eq('id', song.id);
-          // Aplicar visualmente si está en pantalla
           _applycover(song.fileId, dataUrl);
         } else {
           failed++;
@@ -4257,15 +4292,13 @@ async function startCoverSync(){
       done++;
     }));
 
-    // Actualizar UI
-    const progress = Math.round((done / total) * 100);
+    const progress = Math.round((done / pending.length) * 100);
     fill.style.width = progress + '%';
     pct.textContent = progress + '%';
-    label.textContent = `Procesando ${Math.min(done+BATCH, total)} de ${total}...`;
-    status.innerHTML = `🔄 Progreso: <b>${done}/${total}</b> &nbsp;·&nbsp; ✅ encontradas: <b>${found}</b> &nbsp;·&nbsp; ❌ sin carátula: <b>${failed}</b>`;
+    label.textContent = `Procesando ${Math.min(done+BATCH, pending.length)} de ${pending.length}...`;
+    status.innerHTML = `🔄 <b>${done}/${pending.length}</b> procesadas &nbsp;·&nbsp; ✅ carátulas encontradas: <b>${found}</b> &nbsp;·&nbsp; ❌ sin carátula: <b>${failed}</b>`;
 
-    // Pequeña pausa para no saturar el API
-    await new Promise(r => setTimeout(r, 200));
+    await new Promise(r => setTimeout(r, 150));
   }
 
   _syncRunning = false;
@@ -4273,12 +4306,15 @@ async function startCoverSync(){
   btn.style.opacity = '1';
   stopBtn.style.display = 'none';
   fill.style.width = '100%';
-  pct.textContent = '100%';
+  pct.textContent = _syncStop ? pct.textContent : '100%';
 
   if(_syncStop){
-    status.innerHTML = `⏹️ Sincronización detenida. <b>${found}</b> carátulas guardadas hasta el momento.`;
+    status.innerHTML = `⏹️ Detenida. <b>${found}</b> carátulas guardadas.`;
   } else {
-    status.innerHTML = `🎉 <b>Sincronización completa.</b><br>✅ <b>${found}</b> carátulas guardadas &nbsp;·&nbsp; ❌ <b>${failed}</b> MP3 sin carátula incrustada<br><span style="color:var(--text3);font-size:0.75rem">Las carátulas guardadas se mostrarán instantáneamente en próximas sesiones.</span>`;
+    status.innerHTML = `🎉 <b>Completado.</b><br>
+      ✅ <b>${found}</b> carátulas guardadas en Supabase<br>
+      ❌ <b>${failed}</b> MP3 sin carátula incrustada o inaccesibles<br>
+      <span style="color:var(--text3);font-size:0.74rem">Las carátulas ya guardadas se muestran instantáneamente en futuras sesiones.</span>`;
     toast('✅ '+found+' carátulas sincronizadas');
     renderAll();
   }
