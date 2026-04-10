@@ -1897,8 +1897,47 @@
         <div class="view-header">
           <div><div class="view-title">Servicios en la nube</div><div class="view-subtitle">Conecta tus nubes para acceder a tu música</div></div>
         </div>
-        <div class="clouds-grid" id="cloudsGrid">
-          <!-- Las tarjetas se cargan aquí -->
+        <div class="clouds-grid" id="cloudsGrid"></div>
+
+        <!-- PANEL SINCRONIZACIÓN DE CARÁTULAS -->
+        <div id="coverSyncPanel" style="
+          margin-top:28px;background:var(--card);border:1px solid var(--border);
+          border-radius:16px;padding:22px 24px;
+        ">
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px">
+            <span style="font-size:1.6rem">🖼️</span>
+            <div>
+              <div style="font-family:'Syne',sans-serif;font-weight:700;font-size:1rem">Sincronizar carátulas</div>
+              <div style="font-size:0.78rem;color:var(--text3);margin-top:2px">Lee las carátulas incrustadas en tus MP3 y las guarda en la base de datos</div>
+            </div>
+          </div>
+          <div id="coverSyncStatus" style="
+            margin:14px 0;font-size:0.82rem;color:var(--text2);
+            background:var(--bg3);border-radius:10px;padding:12px 15px;
+            display:none;line-height:1.6;
+          "></div>
+          <div id="coverSyncBar" style="display:none;margin-bottom:12px">
+            <div style="display:flex;justify-content:space-between;font-size:0.73rem;color:var(--text3);margin-bottom:5px">
+              <span id="coverSyncLabel">Procesando...</span>
+              <span id="coverSyncPct">0%</span>
+            </div>
+            <div style="height:6px;background:var(--bg4);border-radius:3px;overflow:hidden">
+              <div id="coverSyncFill" style="height:100%;width:0%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:3px;transition:width 0.4s ease"></div>
+            </div>
+          </div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap">
+            <button id="coverSyncBtn" onclick="startCoverSync()" style="
+              padding:10px 20px;border:none;border-radius:10px;
+              background:linear-gradient(135deg,var(--accent),var(--accent2));
+              color:white;font-family:'Syne',sans-serif;font-weight:600;
+              font-size:0.83rem;cursor:pointer;transition:opacity 0.2s;
+            ">▶ Iniciar sincronización</button>
+            <button id="coverSyncStopBtn" onclick="stopCoverSync()" style="
+              display:none;padding:10px 20px;border:1px solid var(--border);
+              border-radius:10px;background:transparent;color:var(--text2);
+              font-family:'Syne',sans-serif;font-size:0.83rem;cursor:pointer;
+            ">■ Detener</button>
+          </div>
         </div>
       </div>
 
@@ -4130,6 +4169,124 @@ function _initCoverObserver(){
 
 const _origRenderAll=window.renderAll;
 window.renderAll=function(){if(_origRenderAll)_origRenderAll();setTimeout(_initCoverObserver,100);};
+
+// ══ SINCRONIZACIÓN MASIVA DE CARÁTULAS ══
+let _syncRunning = false;
+let _syncStop = false;
+
+async function startCoverSync(){
+  if(_syncRunning) return;
+  const btn = document.getElementById('coverSyncBtn');
+  const stopBtn = document.getElementById('coverSyncStopBtn');
+  const status = document.getElementById('coverSyncStatus');
+  const bar = document.getElementById('coverSyncBar');
+  const fill = document.getElementById('coverSyncFill');
+  const label = document.getElementById('coverSyncLabel');
+  const pct = document.getElementById('coverSyncPct');
+
+  // Canciones sin carátula guardada y con fileId válido
+  const pending = songs.filter(s => !s.coverUrl && s.fileId);
+  if(!pending.length){
+    status.style.display='block';
+    status.innerHTML='✅ <b>Todas las canciones ya tienen carátula guardada.</b> No hay nada que sincronizar.';
+    return;
+  }
+
+  const token = Object.keys(connectedClouds)
+    .filter(k=>k.startsWith('_tok_')&&connectedClouds[k])
+    .map(k=>connectedClouds[k])[0] || null;
+
+  if(!token){
+    status.style.display='block';
+    status.innerHTML='⚠️ No hay cuenta de nube conectada. Conecta Google Drive primero.';
+    return;
+  }
+
+  _syncRunning = true;
+  _syncStop = false;
+  btn.disabled = true;
+  btn.style.opacity = '0.5';
+  stopBtn.style.display = 'inline-block';
+  status.style.display = 'block';
+  bar.style.display = 'block';
+
+  let found = 0, failed = 0, done = 0;
+  const total = pending.length;
+
+  status.innerHTML = `⏳ Iniciando... <b>${total}</b> canciones sin carátula encontradas.`;
+
+  // Procesar en lotes de 3 simultáneas
+  const BATCH = 3;
+  for(let i = 0; i < total; i += BATCH){
+    if(_syncStop) break;
+    const batch = pending.slice(i, i + BATCH);
+
+    await Promise.all(batch.map(async song => {
+      if(_syncStop) return;
+      try {
+        const songToken = connectedClouds['_tok_'+(song.accountKey||'')] || token;
+        const url = 'https://www.googleapis.com/drive/v3/files/'+song.fileId+'?alt=media';
+        const r = await fetch(url, {headers:{Authorization:'Bearer '+songToken, Range:'bytes=0-524287'}});
+        if(!r.ok){ failed++; return; }
+        const blob = await r.blob();
+        const dataUrl = await new Promise(resolve => {
+          jsmediatags.read(blob, {
+            onSuccess: tag => {
+              const pic = tag.tags && tag.tags.picture;
+              if(!pic){ resolve(null); return; }
+              const bytes = new Uint8Array(pic.data);
+              let bin = '';
+              for(let b=0;b<bytes.byteLength;b++) bin+=String.fromCharCode(bytes[b]);
+              resolve('data:'+pic.format+';base64,'+btoa(bin));
+            },
+            onError: () => resolve(null)
+          });
+        });
+        if(dataUrl){
+          found++;
+          song.coverUrl = dataUrl;
+          _coverCache[song.fileId] = dataUrl;
+          // Guardar en Supabase
+          await _supabase.from('songs').update({cover_url: dataUrl}).eq('id', song.id);
+          // Aplicar visualmente si está en pantalla
+          _applycover(song.fileId, dataUrl);
+        } else {
+          failed++;
+        }
+      } catch(e){ failed++; }
+      done++;
+    }));
+
+    // Actualizar UI
+    const progress = Math.round((done / total) * 100);
+    fill.style.width = progress + '%';
+    pct.textContent = progress + '%';
+    label.textContent = `Procesando ${Math.min(done+BATCH, total)} de ${total}...`;
+    status.innerHTML = `🔄 Progreso: <b>${done}/${total}</b> &nbsp;·&nbsp; ✅ encontradas: <b>${found}</b> &nbsp;·&nbsp; ❌ sin carátula: <b>${failed}</b>`;
+
+    // Pequeña pausa para no saturar el API
+    await new Promise(r => setTimeout(r, 200));
+  }
+
+  _syncRunning = false;
+  btn.disabled = false;
+  btn.style.opacity = '1';
+  stopBtn.style.display = 'none';
+  fill.style.width = '100%';
+  pct.textContent = '100%';
+
+  if(_syncStop){
+    status.innerHTML = `⏹️ Sincronización detenida. <b>${found}</b> carátulas guardadas hasta el momento.`;
+  } else {
+    status.innerHTML = `🎉 <b>Sincronización completa.</b><br>✅ <b>${found}</b> carátulas guardadas &nbsp;·&nbsp; ❌ <b>${failed}</b> MP3 sin carátula incrustada<br><span style="color:var(--text3);font-size:0.75rem">Las carátulas guardadas se mostrarán instantáneamente en próximas sesiones.</span>`;
+    toast('✅ '+found+' carátulas sincronizadas');
+    renderAll();
+  }
+}
+
+function stopCoverSync(){
+  _syncStop = true;
+}
 
 // ══ BOOT ══
 document.getElementById('welcomeLogoImg').src=LOGO_B64;
