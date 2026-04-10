@@ -440,6 +440,10 @@
     margin-bottom: 8px;
     box-shadow: 0 0 0 3px rgba(167,139,250,0.25), 0 6px 20px rgba(124,92,252,0.35);
   }
+  .auth-logo-svg {
+    margin-bottom: 10px;
+    filter: drop-shadow(0 0 14px rgba(212,175,55,0.45));
+  }
   .auth-screen-logo span {
     font-family: 'Playfair Display', Georgia, serif;
     font-size: 2.2rem;
@@ -1418,7 +1422,25 @@
     Volver
   </div>
   <div class="auth-screen-logo">
-    <img class="loginLogoImg" src="" alt="Sonatta">
+    <div class="auth-logo-svg">
+      <svg viewBox="0 0 60 60" xmlns="http://www.w3.org/2000/svg" width="62" height="62">
+        <defs>
+          <radialGradient id="alBg" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="#1a1520"/>
+            <stop offset="100%" stop-color="#0d0d18"/>
+          </radialGradient>
+          <radialGradient id="alGlow" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="rgba(212,175,55,0.22)"/>
+            <stop offset="100%" stop-color="rgba(212,175,55,0)"/>
+          </radialGradient>
+        </defs>
+        <circle cx="30" cy="30" r="29" fill="url(#alGlow)"/>
+        <circle cx="30" cy="30" r="27" fill="none" stroke="rgba(212,175,55,0.6)" stroke-width="1.3"/>
+        <circle cx="30" cy="30" r="22" fill="none" stroke="rgba(212,175,55,0.28)" stroke-width="0.9"/>
+        <circle cx="30" cy="30" r="18" fill="url(#alBg)" stroke="rgba(212,175,55,0.65)" stroke-width="1.4"/>
+        <text x="30" y="38" text-anchor="middle" font-size="22" fill="white" font-family="Georgia, serif">𝄞</text>
+      </svg>
+    </div>
     <span>Sonatta</span>
   </div>
   <div class="auth-card">
@@ -1452,7 +1474,25 @@
     Volver
   </div>
   <div class="auth-screen-logo">
-    <img class="registerLogoImg" src="" alt="Sonatta">
+    <div class="auth-logo-svg">
+      <svg viewBox="0 0 60 60" xmlns="http://www.w3.org/2000/svg" width="62" height="62">
+        <defs>
+          <radialGradient id="alBg2" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="#1a1520"/>
+            <stop offset="100%" stop-color="#0d0d18"/>
+          </radialGradient>
+          <radialGradient id="alGlow2" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="rgba(212,175,55,0.22)"/>
+            <stop offset="100%" stop-color="rgba(212,175,55,0)"/>
+          </radialGradient>
+        </defs>
+        <circle cx="30" cy="30" r="29" fill="url(#alGlow2)"/>
+        <circle cx="30" cy="30" r="27" fill="none" stroke="rgba(212,175,55,0.6)" stroke-width="1.3"/>
+        <circle cx="30" cy="30" r="22" fill="none" stroke="rgba(212,175,55,0.28)" stroke-width="0.9"/>
+        <circle cx="30" cy="30" r="18" fill="url(#alBg2)" stroke="rgba(212,175,55,0.65)" stroke-width="1.4"/>
+        <text x="30" y="38" text-anchor="middle" font-size="22" fill="white" font-family="Georgia, serif">𝄞</text>
+      </svg>
+    </div>
     <span>Sonatta</span>
   </div>
   <div class="auth-card">
@@ -3985,7 +4025,6 @@ window.renderAll=function(){if(_origRenderAll)_origRenderAll();setTimeout(_initC
 // ══ BOOT ══
 document.getElementById('welcomeLogoImg').src=LOGO_B64;
 document.getElementById('mobileTopbarLogo').src=LOGO_B64;
-document.querySelectorAll('.loginLogoImg, .registerLogoImg').forEach(el=>el.src=LOGO_B64);
 checkSession();
 
 // ── ANDROID / iOS TOUCH & VIEWPORT FIX ──
