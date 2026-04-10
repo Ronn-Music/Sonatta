@@ -1128,12 +1128,17 @@
     display: flex; align-items: center; gap: 8px;
   }
   .mobile-topbar-logo img { width:28px;height:28px;border-radius:50%;object-fit:cover; }
+  .mobile-topbar-logo-svg {
+    display: flex; align-items: center; justify-content: center;
+    filter: drop-shadow(0 0 6px rgba(212,175,55,0.45));
+    flex-shrink: 0;
+  }
   .mobile-topbar-logo span {
     font-family: 'Playfair Display', Georgia, serif;
     font-size: 1.1rem;
     font-weight: 700;
     letter-spacing: 0.5px;
-    background: linear-gradient(to right, #0d2464 0%, #0d2464 30%, #7a2800 62%, #fc4b08 100%);
+    background: linear-gradient(to right, #d4af37 0%, #d4af37 30%, #b8640a 62%, #fc4b08 100%);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
@@ -1246,18 +1251,34 @@
     .songs-list-header span:nth-child(4) { display: none; }
     .song-row { grid-template-columns: 32px 1fr 54px 28px; }
     .song-artist-cell, .song-album-cell { display: none; }
-    .player-bar { padding: 0 14px; gap: 10px; height: var(--player-h); }
-    .now-playing { width: auto; flex: 1; min-width: 0; }
+    .player-bar { padding: 0 12px; gap: 8px; height: var(--player-h); }
+    .now-playing { width: auto; min-width: 0; flex: 0 0 auto; max-width: 38%; }
     .np-info { min-width: 0; flex: 1; }
-    .np-title { font-size: 0.78rem; }
-    .np-artist { font-size: 0.68rem; }
+    .np-title { font-size: 0.75rem; }
+    .np-artist { font-size: 0.65rem; }
     .vol-area { display: none; }
-    .player-controls { flex: 0; }
-    .progress-row { display: none; }
-    .ctrl-btns { gap: 2px; }
+    /* Controles visibles en móvil */
+    .player-controls {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 5px;
+      min-width: 0;
+    }
+    .progress-row {
+      display: flex;
+      width: 100%;
+      gap: 6px;
+    }
+    .prog-time { font-size: 0.62rem; width: 28px; }
+    .ctrl-btns { gap: 1px; }
     .ctrl-btn { padding: 5px; }
+    /* Mostrar todos los botones de control en móvil */
     .ctrl-btns > button:first-child,
-    .ctrl-btns > button:last-child { display: none; }
+    .ctrl-btns > button:last-child { display: flex; }
+    .ctrl-play { width: 32px; height: 32px; }
+    .np-heart { font-size: 0.9rem; padding: 3px; flex-shrink: 0; }
     .playlists-grid { grid-template-columns: repeat(auto-fill,minmax(155px,1fr)); gap: 10px; }
     .clouds-grid { grid-template-columns: 1fr; }
     .songs-grid-wrap { grid-template-columns: repeat(auto-fill,minmax(130px,1fr)); gap: 10px; padding: 0 0 16px; }
@@ -1579,7 +1600,25 @@
   <!-- MOBILE TOP BAR (visible solo en móvil) -->
   <div class="mobile-topbar" id="mobileTopbar">
     <div class="mobile-topbar-logo">
-      <img id="mobileTopbarLogo" src="" alt="Sonatta">
+      <div class="mobile-topbar-logo-svg">
+        <svg viewBox="0 0 60 60" xmlns="http://www.w3.org/2000/svg" width="32" height="32">
+          <defs>
+            <radialGradient id="mtBg" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stop-color="#1a1520"/>
+              <stop offset="100%" stop-color="#0d0d18"/>
+            </radialGradient>
+            <radialGradient id="mtGlow" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stop-color="rgba(212,175,55,0.2)"/>
+              <stop offset="100%" stop-color="rgba(212,175,55,0)"/>
+            </radialGradient>
+          </defs>
+          <circle cx="30" cy="30" r="29" fill="url(#mtGlow)"/>
+          <circle cx="30" cy="30" r="27" fill="none" stroke="rgba(212,175,55,0.6)" stroke-width="1.4"/>
+          <circle cx="30" cy="30" r="21" fill="none" stroke="rgba(212,175,55,0.25)" stroke-width="0.9"/>
+          <circle cx="30" cy="30" r="18" fill="url(#mtBg)" stroke="rgba(212,175,55,0.65)" stroke-width="1.4"/>
+          <text x="30" y="38" text-anchor="middle" font-size="22" fill="white" font-family="Georgia, serif">𝄞</text>
+        </svg>
+      </div>
       <span>Sonatta</span>
     </div>
     <button class="mobile-menu-btn" onclick="toggleMobileSidebar()" aria-label="Menú">
@@ -4024,7 +4063,6 @@ window.renderAll=function(){if(_origRenderAll)_origRenderAll();setTimeout(_initC
 
 // ══ BOOT ══
 document.getElementById('welcomeLogoImg').src=LOGO_B64;
-document.getElementById('mobileTopbarLogo').src=LOGO_B64;
 checkSession();
 
 // ── ANDROID / iOS TOUCH & VIEWPORT FIX ──
