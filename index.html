@@ -2960,10 +2960,11 @@ async function silentRefreshGDrive(accountKey){
       }
     }catch(e){ refreshToken=null; }
     if(!refreshToken){
-      console.log('ℹ️ Sin refresh_token para',accountKey,'— se intentará con token actual');
+      console.log('\u2139\ufe0f Sin refresh_token en BD para',accountKey,'— se necesita reconectar con OAuth para obtenerlo');
       delete _silentRefreshInProgress[accountKey];
       return null;
     }
+    console.log('\u{1f511} refresh_token encontrado para',accountKey,'(',refreshToken.substring(0,8),'...) — llamando /api/refresh-token');
     // Llamar al Edge Function en Vercel (tiene el client_secret de forma segura)
     const{data:{session}}=await _supabase.auth.getSession();
     const supaToken=session?.access_token||'';
@@ -2978,7 +2979,7 @@ async function silentRefreshGDrive(accountKey){
       console.log('\u2705 Token renovado automaticamente para',accountKey);
       return {token:data.access_token, expiresIn:data.expires_in||3600};
     }
-    console.warn('Refresh fallido para',accountKey,':',data.error);
+    console.warn('Refresh fallido para',accountKey,'status:',res.status,'error:',data.error,'desc:',data.error_description||data.message||'');
     return null;
   }catch(e){
     console.error('silentRefreshGDrive error:',e);
@@ -3041,17 +3042,17 @@ function showTokenExpiredBanner(accountKey,label){
     +'<button onclick="this.parentElement.parentElement.remove()" style="background:rgba(255,255,255,0.2);color:white;border:none;border-radius:8px;padding:6px 10px;font-size:0.8rem;cursor:pointer">✕</button>'
     +'</div>';
   document.body.prepend(banner);
-  // Al tocar reconectar: primero intenta iframe silencioso, si falla abre popup visible
+  // Reconectar: si hay refresh_token usa refresh silencioso, si no va directo a OAuth completo
   document.getElementById('bannerReconnectBtn').addEventListener('click',async function(){
-    this.textContent='⏳ Reconectando...'; this.disabled=true;
+    this.textContent='Reconectando...'; this.disabled=true;
     const refreshed=await silentRefreshGDrive(ak);
     if(refreshed&&refreshed.token){
       await updateGDriveTokenOnly(ak,refreshed.token,refreshed.expiresIn||3600);
       banner.remove();
-      toast('🔑 Sesión renovada — reproduciendo...');
+      toast('Sesion renovada — reproduciendo...');
       if(currentSongIdx!==-1) playSongById(songs[currentSongIdx].id);
     } else {
-      // Silencioso falló — abrir popup OAuth normal
+      // Sin refresh_token disponible — OAuth completo para obtenerlo
       banner.remove();
       startConnect('gdrive');
     }
@@ -3122,8 +3123,11 @@ async function _oauthMsg(ev){
     const{data:{session}}=await _supabase.auth.getSession();
     const supaToken=session?.access_token||'';
     try{
-      console.log('📨 Llamando /api/exchange-code con code...');
+      console.log('Llamando /api/exchange-code con code...');
       const res=await fetch('/api/exchange-code',{
+        method:'POST',
+        headers:{'Content-Type':'application/json','Authorization':'Bearer '+supaToken},
+        body:JSON.stringify({code:msg.code,redirect_uri:GOOGLE_REDIRECT})
       });
       const data=await res.json();
       if(!data.access_token){toast('Error al conectar: '+(data.error||'desconocido'));return;}
