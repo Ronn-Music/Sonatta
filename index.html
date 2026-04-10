@@ -2635,10 +2635,13 @@ audioEl.addEventListener('error',(e)=>{
   const err=audioEl.error;
   if(err&&err.code===4&&currentSongIdx!==-1){
     const song=songs[currentSongIdx];
-    console.warn('Audio error code 4 (likely token expired) for',song.accountKey);
+    console.warn('Audio error code 4 (token expirado?) para',song.accountKey);
     isPlaying=false; updatePlayBtn();
     autoRefreshToken(song.accountKey||'gdrive', song.accountKey||'Google Drive')
-      .then(ok=>{ if(ok) playSongById(song.id); });
+      .then(ok=>{
+        if(ok) playSongById(song.id);
+        else showTokenExpiredBanner(song.accountKey||'gdrive', song.accountKey||'Google Drive');
+      });
   } else {
     console.error('Audio error:',e);
     toast('Error al reproducir. Intenta de nuevo.');
@@ -2708,6 +2711,13 @@ async function playSongById(id){
             :p.accounts[p.accounts.length-1];
           if(acc){
             if(acc.expires&&new Date(acc.expires)<new Date()){
+              // Token expirado — intentar renovar silenciosamente antes de fallar
+              const refreshed=await autoRefreshToken(acc.key||'gdrive', acc.label||acc.key);
+              if(refreshed){
+                // Token renovado — reintentar reproducción
+                playSongById(id); return;
+              }
+              // No se pudo renovar — mostrar banner solo ahora
               showTokenExpiredBanner(acc.key||'gdrive', acc.label||acc.key); return;
             }
             token=acc.token;
@@ -2716,13 +2726,22 @@ async function playSongById(id){
       } catch(e){}
       if(!token){
         const rawExpired=row.token_expires_at&&new Date(row.token_expires_at)<new Date();
-        if(rawExpired){ showTokenExpiredBanner(song.accountKey||'gdrive', song.accountKey||'Google Drive'); return; }
+        if(rawExpired){
+          const refreshed=await autoRefreshToken(song.accountKey||'gdrive', song.accountKey||'Google Drive');
+          if(refreshed){ playSongById(id); return; }
+          showTokenExpiredBanner(song.accountKey||'gdrive', song.accountKey||'Google Drive'); return;
+        }
         token=row.access_token;
       }
       if(token) connectedClouds['_tok_'+(song.accountKey||song.cloud||'gdrive')]=token;
     }
   }
-  if(!token){ showTokenExpiredBanner('gdrive','Google Drive'); return; }
+  if(!token){
+    // Intentar obtener token via refresh silencioso antes de mostrar banner
+    const refreshed=await autoRefreshToken(song.accountKey||'gdrive', song.accountKey||'Google Drive');
+    if(refreshed){ playSongById(id); return; }
+    showTokenExpiredBanner('gdrive','Google Drive'); return;
+  }
 
   // Construir URL correcta de Google Drive — extraer solo el fileId
   // Soporta cualquier formato guardado: /files/ID, /files/ID?alt=media, /files/ID?alt=media=1
@@ -2766,12 +2785,13 @@ async function playSongById(id){
 
     if (!res.ok) {
       if (res.status === 401 || res.status === 403) {
-        console.warn('Token inválido ('+res.status+') para', song.accountKey||'gdrive');
+        console.warn('Token invalido ('+res.status+') para', song.accountKey||'gdrive');
         const refreshed=await autoRefreshToken(song.accountKey||'gdrive', song.accountKey||'Google Drive');
         if(myRequestId !== _playRequestId) return;
         if(refreshed){ playSongById(id); return; }
+        // Refresh fallido y usuario esta intentando reproducir — ahora si mostrar banner
         isPlaying=false; updatePlayBtn();
-        toast('⚠ Token expirado. Reconecta Google Drive.');
+        showTokenExpiredBanner(song.accountKey||'gdrive', song.accountKey||'Google Drive');
         return;
       }
       if (res.status === 404) {
@@ -2940,7 +2960,7 @@ async function silentRefreshGDrive(accountKey){
       }
     }catch(e){ refreshToken=null; }
     if(!refreshToken){
-      console.warn('No hay refresh_token para',accountKey,'-- el usuario debe reconectar una vez');
+      console.log('ℹ️ Sin refresh_token para',accountKey,'— se intentará con token actual');
       delete _silentRefreshInProgress[accountKey];
       return null;
     }
@@ -2992,19 +3012,19 @@ async function updateGDriveTokenOnly(accountKey,newToken,expiresIn){
   }catch(e){console.error('updateGDriveTokenOnly:',e);return false;}
 }
 
-// ── 3. Try silent iframe refresh → if fails, try small visible popup → fallback banner ──
+// ── 3. Try silent server-side refresh — never shows banner automatically ──
 async function autoRefreshToken(accountKey,label){
-  console.log('🔄 Silent refresh attempt (iframe) for',label||accountKey);
+  console.log('🔄 Intentando refresh silencioso para',label||accountKey);
   const result=await silentRefreshGDrive(accountKey);
   if(result&&result.token){
     await updateGDriveTokenOnly(accountKey,result.token,result.expiresIn||3600);
     const eb=document.getElementById('tokenExpiredBanner'); if(eb)eb.remove();
-    toast('🔑 Sesión renovada automáticamente');
+    console.log('\u2705 Token renovado silenciosamente para',label||accountKey);
     return true;
   }
-  // Iframe falló — mostrar banner con un solo clic de reconexión
-  console.warn('❌ Silent refresh failed for',label||accountKey,'— showing banner');
-  showTokenExpiredBanner(accountKey,label);
+  // Refresh silencioso fallo — retornar false sin mostrar nada al usuario
+  // El banner solo aparecera si el usuario intenta reproducir y el token falla en ese momento
+  console.log('\u26a0\ufe0f Refresh silencioso fallo para',label||accountKey,'— se reintentara al reproducir');
   return false;
 }
 
@@ -3038,16 +3058,25 @@ function showTokenExpiredBanner(accountKey,label){
   });
 }
 
-// ── 4. Schedule proactive silent refresh 5 min before expiry ──
+// ── 4. Schedule proactive silent refresh 5 min before expiry, with retry ──
 function scheduleTokenRefresh(accountKey,label,expiresAt){
   if(_tokenRefreshTimers[accountKey]) clearTimeout(_tokenRefreshTimers[accountKey]);
   const msUntilExpiry=new Date(expiresAt).getTime()-Date.now();
   if(msUntilExpiry<=0){
-    setTimeout(()=>autoRefreshToken(accountKey,label),500);
+    // Ya expirado — reintentar cada 2 min hasta 5 veces, sin molestar al usuario
+    _retryRefreshCount = _retryRefreshCount || {};
+    const retries = _retryRefreshCount[accountKey] || 0;
+    if(retries < 5){
+      _retryRefreshCount[accountKey] = retries + 1;
+      setTimeout(()=>autoRefreshToken(accountKey,label).then(ok=>{
+        if(!ok) scheduleTokenRefresh(accountKey,label,new Date(Date.now()-1).toISOString());
+        else { _retryRefreshCount[accountKey]=0; }
+      }),1500 + retries*2*60*1000);
+    }
     return;
   }
   const msUntilRefresh=Math.max(msUntilExpiry-5*60*1000,0);
-  console.log('⏱ Token for',label||accountKey,'expires in',Math.round(msUntilExpiry/60000),'min — silent refresh in',Math.round(msUntilRefresh/60000),'min');
+  console.log('Token',label||accountKey,'expira en',Math.round(msUntilExpiry/60000),'min — refresh silencioso en',Math.round(msUntilRefresh/60000),'min');
   _tokenRefreshTimers[accountKey]=setTimeout(()=>{
     delete _tokenRefreshTimers[accountKey];
     autoRefreshToken(accountKey,label);
