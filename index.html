@@ -105,6 +105,98 @@
   }
 
   /* ANDROID PERF: desactivar animaciones pesadas en móvil para evitar freeze de GPU */
+  /* ══ SETTINGS VIEW ══ */
+  .cfg-section-title {
+    font-family: 'Syne', sans-serif;
+    font-size: 0.78rem; font-weight: 700;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 1.5px;
+    margin-bottom: 12px;
+  }
+  .cfg-card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 16px; padding: 22px 24px; margin-bottom: 12px;
+  }
+  .cfg-profile-row {
+    display: flex; align-items: flex-start; gap: 22px;
+  }
+  .cfg-avatar-wrap {
+    position: relative; flex-shrink: 0; cursor: pointer;
+  }
+  .cfg-avatar {
+    width: 80px; height: 80px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--accent), var(--accent3));
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Syne', sans-serif; font-size: 2rem; font-weight: 800;
+    overflow: hidden; border: 2px solid var(--border);
+    transition: border-color 0.2s;
+  }
+  .cfg-avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
+  .cfg-avatar-wrap:hover .cfg-avatar { border-color: var(--accent); }
+  .cfg-avatar-overlay {
+    position: absolute; inset: 0; border-radius: 50%;
+    background: rgba(0,0,0,0.5); display: flex; align-items: center;
+    justify-content: center; font-size: 1.3rem;
+    opacity: 0; transition: opacity 0.2s;
+  }
+  .cfg-avatar-wrap:hover .cfg-avatar-overlay { opacity: 1; }
+  .cfg-profile-info { flex: 1; min-width: 0; }
+  .cfg-field-label {
+    font-size: 0.72rem; color: var(--text3); text-transform: uppercase;
+    letter-spacing: 1px; margin-bottom: 6px; margin-top: 4px;
+  }
+  .cfg-field-row { display: flex; gap: 10px; align-items: center; }
+  .cfg-input {
+    flex: 1; background: var(--bg3); border: 1px solid var(--border);
+    border-radius: 9px; padding: 9px 13px; color: var(--text);
+    font-size: 0.88rem; font-family: 'DM Sans', sans-serif;
+    outline: none; transition: border-color 0.2s;
+    min-width: 0;
+  }
+  .cfg-input:focus { border-color: var(--accent); }
+  .cfg-save-btn {
+    padding: 9px 16px; background: var(--accent); border: none;
+    border-radius: 9px; color: white; font-family: 'Syne', sans-serif;
+    font-size: 0.8rem; font-weight: 600; cursor: pointer;
+    white-space: nowrap; transition: opacity 0.2s; flex-shrink: 0;
+  }
+  .cfg-save-btn:hover { opacity: 0.85; }
+  .cfg-plan-badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    background: rgba(124,92,252,0.15); border: 1px solid rgba(124,92,252,0.3);
+    border-radius: 100px; padding: 4px 12px;
+    font-size: 0.73rem; color: var(--accent2); font-weight: 600;
+  }
+  .cfg-tool-row {
+    display: flex; align-items: flex-start;
+    justify-content: space-between; gap: 16px;
+  }
+  .cfg-tool-title {
+    font-family: 'Syne', sans-serif; font-weight: 700;
+    font-size: 0.92rem; margin-bottom: 4px;
+  }
+  .cfg-tool-desc { font-size: 0.78rem; color: var(--text3); line-height: 1.5; }
+  .cfg-divider {
+    height: 1px; background: var(--border); margin: 18px 0;
+  }
+  .cfg-action-btn {
+    padding: 9px 18px; border: none; border-radius: 10px;
+    font-family: 'Syne', sans-serif; font-weight: 600;
+    font-size: 0.8rem; cursor: pointer; white-space: nowrap;
+    flex-shrink: 0; transition: opacity 0.2s;
+  }
+  .cfg-action-btn:hover { opacity: 0.82; }
+  .cfg-btn-yellow { background: linear-gradient(135deg,#f59e0b,#d97706); color: white; }
+  .cfg-btn-purple { background: linear-gradient(135deg,var(--accent),var(--accent2)); color: white; }
+  .cfg-btn-ghost {
+    background: transparent; color: var(--text2);
+    border: 1px solid var(--border) !important;
+  }
+  @media (max-width: 600px) {
+    .cfg-profile-row { flex-direction: column; align-items: center; text-align: center; }
+    .cfg-tool-row { flex-direction: column; }
+    .cfg-action-btn { width: 100%; }
+  }
+
   @media (max-width: 768px) {
     .ws-grain { animation: none !important; display: none !important; }
     .ws-orb1, .ws-orb2, .ws-orb3 { animation: none !important; }
@@ -1731,6 +1823,10 @@
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
           Me Gusta
         </div>
+        <div class="nav-item" onclick="showView('settings',this)">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+          Configuración
+        </div>
       </div>
 
       <div class="sidebar-section">
@@ -1899,66 +1995,93 @@
         </div>
         <div class="clouds-grid" id="cloudsGrid"></div>
 
-        <!-- PANEL SINCRONIZACIÓN DE CARÁTULAS -->
-        <div id="coverSyncPanel" style="
-          margin-top:28px;background:var(--card);border:1px solid var(--border);
-          border-radius:16px;padding:22px 24px;
-        ">
-          <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px">
-            <span style="font-size:1.6rem">🖼️</span>
-            <div>
-              <div style="font-family:'Syne',sans-serif;font-weight:700;font-size:1rem">Sincronizar carátulas</div>
-              <div style="font-size:0.78rem;color:var(--text3);margin-top:2px">Lee las carátulas incrustadas en tus MP3 y las guarda en la base de datos</div>
-            </div>
-          </div>
-          <div id="coverSyncStatus" style="
-            margin:14px 0;font-size:0.82rem;color:var(--text2);
-            background:var(--bg3);border-radius:10px;padding:12px 15px;
-            display:none;line-height:1.6;
-          "></div>
-          <div id="coverSyncBar" style="display:none;margin-bottom:12px">
-            <div style="display:flex;justify-content:space-between;font-size:0.73rem;color:var(--text3);margin-bottom:5px">
-              <span id="coverSyncLabel">Procesando...</span>
-              <span id="coverSyncPct">0%</span>
-            </div>
-            <div style="height:6px;background:var(--bg4);border-radius:3px;overflow:hidden">
-              <div id="coverSyncFill" style="height:100%;width:0%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:3px;transition:width 0.4s ease"></div>
-            </div>
-          </div>
-          <div style="display:flex;gap:10px;flex-wrap:wrap">
-            <button id="coverSyncBtn" onclick="startCoverSync()" style="
-              padding:10px 20px;border:none;border-radius:10px;
-              background:linear-gradient(135deg,var(--accent),var(--accent2));
-              color:white;font-family:'Syne',sans-serif;font-weight:600;
-              font-size:0.83rem;cursor:pointer;transition:opacity 0.2s;
-            ">▶ Iniciar sincronización</button>
-            <button id="coverSyncStopBtn" onclick="stopCoverSync()" style="
-              display:none;padding:10px 20px;border:1px solid var(--border);
-              border-radius:10px;background:transparent;color:var(--text2);
-              font-family:'Syne',sans-serif;font-size:0.83rem;cursor:pointer;
-            ">■ Detener</button>
-          </div>
-        </div>
       </div>
 
-      <!-- LIMPIAR DUPLICADOS -->
-      <div class="settings-card" style="border-color:rgba(251,191,36,0.3)">
-        <div class="settings-card-header">
-          <div class="settings-icon" style="background:rgba(251,191,36,0.15);font-size:1.3rem">🗑</div>
+      <!-- CONFIGURACIÓN -->
+      <div class="view" id="view-settings">
+        <div class="view-header">
           <div>
-            <div style="font-family:'Syne',sans-serif;font-weight:700;font-size:1rem">Limpiar duplicados</div>
-            <div style="font-size:0.78rem;color:var(--text3);margin-top:2px">Elimina canciones duplicadas de la base de datos (mantiene la mejor copia)</div>
+            <div class="view-title">Configuración</div>
+            <div class="view-subtitle">Personaliza tu cuenta y herramientas</div>
           </div>
         </div>
-        <div id="dedupStatus" style="margin:14px 0;font-size:0.82rem;color:var(--text2);background:var(--bg3);border-radius:10px;padding:12px 15px;display:none;line-height:1.6;"></div>
-        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
-          <button onclick="cleanDuplicates()" style="
-            padding:10px 20px;border:none;border-radius:10px;
-            background:linear-gradient(135deg,#f59e0b,#d97706);
-            color:white;font-family:'Syne',sans-serif;font-weight:600;
-            font-size:0.83rem;cursor:pointer;transition:opacity 0.2s;
-          ">🧹 Limpiar duplicados</button>
-          <span id="dedupCount" style="font-size:0.78rem;color:var(--text3)"></span>
+
+        <!-- PERFIL -->
+        <div class="cfg-section-title">👤 Perfil</div>
+        <div class="cfg-card">
+          <div class="cfg-profile-row">
+            <div class="cfg-avatar-wrap" onclick="document.getElementById('avatarInput').click()" title="Cambiar foto">
+              <div class="cfg-avatar" id="cfgAvatar">?</div>
+              <div class="cfg-avatar-overlay">📷</div>
+            </div>
+            <input type="file" id="avatarInput" accept="image/*" style="display:none" onchange="handleAvatarChange(this)">
+            <div class="cfg-profile-info">
+              <div class="cfg-field-label">Nombre para mostrar</div>
+              <div class="cfg-field-row">
+                <input type="text" id="cfgDisplayName" class="cfg-input" placeholder="Tu nombre...">
+                <button class="cfg-save-btn" onclick="saveDisplayName()">Guardar</button>
+              </div>
+              <div class="cfg-field-label" style="margin-top:12px">Correo electrónico</div>
+              <div class="cfg-email-row" id="cfgEmail" style="color:var(--text2);font-size:0.87rem;padding:4px 0">—</div>
+              <div class="cfg-field-label" style="margin-top:10px">Plan</div>
+              <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
+                <span class="cfg-plan-badge">✦ Plan Gratis</span>
+              </div>
+            </div>
+          </div>
+          <div id="cfgProfileMsg" style="font-size:0.78rem;margin-top:10px;min-height:16px"></div>
+        </div>
+
+        <!-- BIBLIOTECA -->
+        <div class="cfg-section-title" style="margin-top:28px">🎵 Biblioteca</div>
+        <div class="cfg-card">
+          <div class="cfg-tool-row">
+            <div>
+              <div class="cfg-tool-title">🗑 Limpiar duplicados</div>
+              <div class="cfg-tool-desc">Elimina canciones duplicadas de la BD, mantiene la mejor copia</div>
+              <div id="dedupStatus" style="margin:10px 0 0;font-size:0.81rem;color:var(--text2);background:var(--bg3);border-radius:8px;padding:10px 13px;display:none;line-height:1.6;"></div>
+            </div>
+            <button onclick="cleanDuplicates()" class="cfg-action-btn cfg-btn-yellow">🧹 Limpiar</button>
+          </div>
+          <div class="cfg-divider"></div>
+          <div class="cfg-tool-row">
+            <div>
+              <div class="cfg-tool-title">🖼️ Sincronizar carátulas</div>
+              <div class="cfg-tool-desc">Lee carátulas incrustadas en tus MP3 y las guarda en la base de datos</div>
+              <div id="coverSyncStatus" style="margin:10px 0 0;font-size:0.81rem;color:var(--text2);background:var(--bg3);border-radius:8px;padding:10px 13px;display:none;line-height:1.6;"></div>
+              <div id="coverSyncBar" style="display:none;margin-top:10px">
+                <div style="display:flex;justify-content:space-between;font-size:0.73rem;color:var(--text3);margin-bottom:5px">
+                  <span id="coverSyncLabel">Procesando...</span><span id="coverSyncPct">0%</span>
+                </div>
+                <div style="height:6px;background:var(--bg4);border-radius:3px;overflow:hidden">
+                  <div id="coverSyncFill" style="height:100%;width:0%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:3px;transition:width 0.4s ease"></div>
+                </div>
+              </div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:8px;flex-shrink:0">
+              <button id="coverSyncBtn" onclick="startCoverSync()" class="cfg-action-btn cfg-btn-purple">▶ Sincronizar</button>
+              <button id="coverSyncStopBtn" onclick="stopCoverSync()" style="display:none;" class="cfg-action-btn cfg-btn-ghost">■ Detener</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- CUENTA -->
+        <div class="cfg-section-title" style="margin-top:28px">🔐 Cuenta</div>
+        <div class="cfg-card">
+          <div class="cfg-tool-row">
+            <div>
+              <div class="cfg-tool-title">Cerrar sesión</div>
+              <div class="cfg-tool-desc">Salir de tu cuenta en este dispositivo</div>
+            </div>
+            <button onclick="logout()" class="cfg-action-btn" style="background:rgba(248,113,113,0.15);color:#f87171;border:1px solid rgba(248,113,113,0.3)">Salir</button>
+          </div>
+        </div>
+
+        <!-- VERSIÓN -->
+        <div style="margin-top:36px;padding:20px 0;border-top:1px solid var(--border);text-align:center">
+          <div style="font-family:'Playfair Display',Georgia,serif;font-size:1.1rem;font-weight:700;background:linear-gradient(to right,#d4af37,#b8640a,#fc4b08);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:6px">Sonatta</div>
+          <div style="font-size:0.72rem;color:var(--text3);letter-spacing:1px">Versión 21 · Tu música en las nubes</div>
+          <div style="font-size:0.67rem;color:var(--text3);margin-top:4px;opacity:0.6">© 2025 Sonatta · Almacenamiento: Supabase · Música: Google Drive</div>
         </div>
       </div>
 
@@ -2119,10 +2242,11 @@ function showView(name, navEl){
   const v=document.getElementById('view-'+name); if(v) v.classList.add('active');
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   if(navEl&&navEl.classList&&navEl.classList.contains('nav-item')) navEl.classList.add('active');
-  if(name==='clouds')   renderClouds();
-  if(name==='folders')  renderFolders();
-  if(name==='liked')    renderLiked();
-  if(name==='accounts') renderAccounts();
+  if(name==='clouds')    renderClouds();
+  if(name==='folders')   renderFolders();
+  if(name==='liked')     renderLiked();
+  if(name==='accounts')  renderAccounts();
+  if(name==='settings')  setTimeout(renderSettingsProfile, 50);
 }
 
 // ══ AUTH ══
@@ -3954,7 +4078,7 @@ function closeMobileSidebar(){
 const _mbnMap={
   home:'mbnHome', songs:'mbnSongs', albums:'mbnAlbums',
   artists:'mbnAlbums', playlists:'mbnSongs', liked:'mbnLiked',
-  clouds:'mbnClouds', accounts:'mbnClouds', folders:'mbnFolders'
+  clouds:'mbnClouds', accounts:'mbnClouds', folders:'mbnFolders', settings:'mbnClouds'
 };
 function mobileNav(view, btn){
   // Update bottom nav active state
@@ -4485,6 +4609,80 @@ async function cleanDuplicates(){
   // Recargar biblioteca
   await loadSongsFromDB();
   renderAll();
+}
+
+// ══ CONFIGURACIÓN — PERFIL ══
+function renderSettingsProfile(){
+  if(!currentUser) return;
+  const meta = currentUser.user_metadata || {};
+  const emailEl = document.getElementById('cfgEmail');
+  if(emailEl) emailEl.textContent = currentUser.email || '—';
+  const nameInput = document.getElementById('cfgDisplayName');
+  if(nameInput) nameInput.value = meta.display_name || meta.full_name || meta.name || '';
+  _renderCfgAvatar(meta.avatar_url || meta.picture || null, meta.display_name || meta.full_name || currentUser.email || '?');
+}
+
+function _renderCfgAvatar(url, fallbackName){
+  const el = document.getElementById('cfgAvatar');
+  if(!el) return;
+  if(url){
+    const initial = (fallbackName||'?').charAt(0).toUpperCase();
+    el.innerHTML = '<img src="'+url+'" style="width:100%;height:100%;object-fit:cover;border-radius:50%" onerror="this.parentElement.innerHTML=\'' + initial + '\'">';
+  } else {
+    el.textContent = (fallbackName||'?').charAt(0).toUpperCase();
+  }
+}
+
+async function saveDisplayName(){
+  const input = document.getElementById('cfgDisplayName');
+  const msg = document.getElementById('cfgProfileMsg');
+  const name = (input ? input.value : '').trim();
+  if(!name){ if(msg){msg.style.color='var(--red)';msg.textContent='El nombre no puede estar vacío.';} return; }
+  if(msg){msg.style.color='var(--text3)';msg.textContent='Guardando...';}
+  const { error } = await _supabase.auth.updateUser({ data: { display_name: name } });
+  if(error){
+    if(msg){msg.style.color='var(--red)';msg.textContent='Error: '+error.message;}
+  } else {
+    if(msg){msg.style.color='var(--green)';msg.textContent='✓ Nombre actualizado';}
+    const un = document.getElementById('userName');
+    if(un) un.textContent = name;
+    const gr = document.getElementById('homeGreeting');
+    if(gr) gr.textContent = 'Hola, '+name.split(' ')[0]+' 👋';
+    setTimeout(()=>{ if(msg) msg.textContent=''; }, 3000);
+  }
+}
+
+async function handleAvatarChange(input){
+  const file = input.files && input.files[0];
+  if(!file) return;
+  const msg = document.getElementById('cfgProfileMsg');
+  if(msg){msg.style.color='var(--text3)';msg.textContent='Subiendo imagen...';}
+  const reader = new FileReader();
+  reader.onload = async (e) => {
+    const img = new Image();
+    img.onload = async () => {
+      const MAX = 220;
+      const canvas = document.createElement('canvas');
+      const ratio = Math.min(MAX/img.width, MAX/img.height, 1);
+      canvas.width = Math.round(img.width * ratio);
+      canvas.height = Math.round(img.height * ratio);
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+      const resized = canvas.toDataURL('image/jpeg', 0.85);
+      const { error } = await _supabase.auth.updateUser({ data: { avatar_url: resized } });
+      if(error){
+        if(msg){msg.style.color='var(--red)';msg.textContent='Error: '+error.message;}
+      } else {
+        _renderCfgAvatar(resized, null);
+        const ua = document.getElementById('userAvatar');
+        if(ua) ua.innerHTML = '<img src="'+resized+'" style="width:100%;height:100%;object-fit:cover;border-radius:50%">';
+        if(msg){msg.style.color='var(--green)';msg.textContent='✓ Foto de perfil actualizada';}
+        setTimeout(()=>{ if(msg) msg.textContent=''; }, 3000);
+      }
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+  input.value = '';
 }
 
 // ══ BOOT ══
