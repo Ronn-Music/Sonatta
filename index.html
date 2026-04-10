@@ -2032,7 +2032,8 @@ async function loadClouds(){
           if(!expired){
             anyActive=true;
             connectedClouds['_tok_'+acc.key]=acc.token;
-            connectedClouds['_tok_'+r.provider]=acc.token;
+            // Solo asignar _tok_gdrive si es la primera cuenta activa (no sobreescribir con otras cuentas)
+            if(!connectedClouds['_tok_gdrive']) connectedClouds['_tok_gdrive']=acc.token;
             if(acc.expires) scheduleTokenRefresh(acc.key,acc.label||acc.key,acc.expires);
           } else {
             // Token expirado — encolar refresh para DESPUES de que loadClouds termine
@@ -2468,7 +2469,12 @@ function renderLiked(){
 }
 function renderAccounts(){
   const el=document.getElementById('accountsList'); if(!el) return;
-  const accs=(connectedClouds._accounts||[]).filter(a=>a.provider==='gdrive');
+  let accs=(connectedClouds._accounts||[]).filter(a=>a.provider==='gdrive');
+  // Dedup: si hay cuentas con email específico (key contiene ':'), eliminar la entrada genérica 'gdrive'
+  const hasSpecific=accs.some(a=>a.account_key&&a.account_key.includes(':'));
+  if(hasSpecific) accs=accs.filter(a=>a.account_key!=='gdrive'&&a.account_key!=='gdrive:legacy');
+  // Dedup by label (email) para evitar duplicados del mismo email
+  const seen=new Set(); accs=accs.filter(a=>{ const k=a.account_label||a.account_key; if(seen.has(k)) return false; seen.add(k); return true; });
   if(!accs.length){
     el.innerHTML='<div style="padding:40px;text-align:center;color:var(--text3)">No hay cuentas de Google Drive.<br><br><button class="btn-primary" style="width:auto;padding:10px 22px" onclick="startConnect(\'gdrive\')">Conectar Google Drive</button></div>';
     return;
@@ -2476,7 +2482,7 @@ function renderAccounts(){
   el.innerHTML=accs.map(acc=>{
     const key=acc.account_key||acc.provider;
     const label=acc.account_label||key;
-    const cnt=songs.filter(s=>s.account_key===key).length;
+    const cnt=songs.filter(s=>s.accountKey===key).length;
     return '<div class="account-card">'
       +'<div class="account-icon" style="background:#4285F422">🔵</div>'
       +'<div class="account-info">'
@@ -2497,10 +2503,15 @@ function renderClouds(){
   const el=document.getElementById('cloudsGrid'); if(!el) return;
   const accounts=connectedClouds._accounts||[]; let html='';
   CLOUD_SERVICES.forEach(c=>{
-    const pa=accounts.filter(a=>a.provider===c.id);
+    let pa=accounts.filter(a=>a.provider===c.id);
+    // Dedup: si hay cuentas con email específico, eliminar la entrada genérica
+    const hasSpec=pa.some(a=>a.account_key&&a.account_key.includes(':'));
+    if(hasSpec) pa=pa.filter(a=>a.account_key!==c.id&&a.account_key!==c.id+':legacy');
+    // Dedup by label
+    const seen2=new Set(); pa=pa.filter(a=>{ const k=a.account_label||a.account_key; if(seen2.has(k)) return false; seen2.add(k); return true; });
     if(pa.length){
       pa.forEach(acc=>{
-        const cnt=songs.filter(s=>s.cloud===c.id).length;
+        const cnt=songs.filter(s=>s.cloud===c.id&&s.accountKey===acc.account_key).length;
         html+='<div class="cloud-card"><div class="cloud-card-header">'
           +'<div class="cloud-icon" style="background:'+c.color+'22;font-size:1.4rem;width:46px;height:46px;display:flex;align-items:center;justify-content:center;border-radius:12px">'+c.icon+'</div>'
           +'<div style="flex:1;min-width:0"><div class="cloud-card-name">'+c.name+'</div>'
@@ -2823,6 +2834,43 @@ async function playSongById(id){
     if (!res.ok) {
       if (res.status === 401 || res.status === 403) {
         console.warn('Token invalido ('+res.status+') para', song.accountKey||'gdrive');
+
+        // ANTES de hacer refresh, probar todos los demás tokens disponibles
+        // (el archivo puede pertenecer a una cuenta diferente a la registrada en song.accountKey)
+        const allTokKeys=Object.keys(connectedClouds).filter(k=>
+          k.startsWith('_tok_')&&k!=='_tok_gdrive'&&connectedClouds[k]&&connectedClouds[k]!==token);
+        for(const tk of allTokKeys){
+          const altToken=connectedClouds[tk];
+          if(!altToken) continue;
+          try{
+            const altRes=await fetch(fileUrl,{headers:{Authorization:'Bearer '+altToken}});
+            if(altRes.ok){
+              // Este token funciona — actualizar accountKey del song en memoria
+              const correctKey=tk.replace('_tok_','');
+              song.accountKey=correctKey;
+              connectedClouds['_tok_'+(song.accountKey||'')]=altToken;
+              // Continuar con este blob
+              if(myRequestId!==_playRequestId) return;
+              const blob2=await altRes.blob();
+              if(myRequestId!==_playRequestId) return;
+              if(audioEl._blobUrl){URL.revokeObjectURL(audioEl._blobUrl);audioEl._blobUrl=null;}
+              audioEl._blobUrl=URL.createObjectURL(blob2);
+              audioEl.src=audioEl._blobUrl; audioEl.load();
+              toast('▶ '+song.title+' — '+song.artist);
+              try{
+                await audioEl.play();
+                if(myRequestId!==_playRequestId){audioEl.pause();return;}
+                isPlaying=true; updatePlayBtn(); syncNpModal();
+              }catch(pe){
+                if(pe.name!=='AbortError') toast('Error al reproducir: '+pe.message);
+                isPlaying=false; updatePlayBtn();
+              }
+              return;
+            }
+          }catch(e){ /* continuar con el siguiente token */ }
+        }
+
+        // Ningún token funciona — intentar refresh del token original
         const refreshed=await autoRefreshToken(song.accountKey||'gdrive', song.accountKey||'Google Drive');
         if(myRequestId !== _playRequestId) return;
         if(refreshed){ playSongById(id); return; }
@@ -3351,6 +3399,9 @@ async function saveGDriveToken(accessToken, expiresIn, refreshToken=null){
   const isExistingAccount = accounts.some(a=>a.key===accountKey); // ANTES de filtrar
   const _oldRefreshToken = accounts.find(a=>a.key===accountKey)?.refresh_token || null;
   accounts=accounts.filter(a=>a.key!==accountKey);
+  // Limpiar entrada genérica 'gdrive' (legacy) si ya tenemos cuentas con email específico
+  // para evitar que aparezca una 3ª cuenta "gdrive" fantasma en la UI
+  if(accountKey.includes(':')) accounts=accounts.filter(a=>a.key!=='gdrive'&&a.key!=='gdrive:legacy');
   const finalRefreshToken = refreshToken||_oldRefreshToken||null;
   if(finalRefreshToken) console.log('\u2705 refresh_token guardado para',accountKey,'(',finalRefreshToken.substring(0,8),'...) — renovacion automatica activada');
   else console.warn('\u26a0\ufe0f SIN refresh_token para',accountKey,'— solo el iframe silencioso podra renovar mientras el usuario tenga Google abierto');
