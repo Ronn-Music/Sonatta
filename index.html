@@ -1251,34 +1251,60 @@
     .songs-list-header span:nth-child(4) { display: none; }
     .song-row { grid-template-columns: 32px 1fr 54px 28px; }
     .song-artist-cell, .song-album-cell { display: none; }
-    .player-bar { padding: 0 12px; gap: 8px; height: var(--player-h); }
-    .now-playing { width: auto; min-width: 0; flex: 0 0 auto; max-width: 38%; }
-    .np-info { min-width: 0; flex: 1; }
-    .np-title { font-size: 0.75rem; }
-    .np-artist { font-size: 0.65rem; }
-    .vol-area { display: none; }
-    /* Controles visibles en móvil */
+    .player-bar {
+      padding: 8px 14px 6px;
+      gap: 0;
+      height: auto;
+      min-height: 80px;
+      flex-direction: column;
+      align-items: stretch;
+      position: relative;
+    }
+    /* Fila 1: info de canción + corazón */
+    .now-playing {
+      width: 100%;
+      flex: none;
+      gap: 10px;
+      margin-bottom: 6px;
+    }
+    .np-art { width: 36px; height: 36px; font-size: 1.1rem; flex-shrink: 0; }
+    .np-info { flex: 1; min-width: 0; }
+    .np-title { font-size: 0.78rem; }
+    .np-artist { font-size: 0.67rem; }
+    .np-heart { font-size: 0.9rem; padding: 3px; flex-shrink: 0; }
+    /* Fila 2: controles centrados */
     .player-controls {
-      flex: 1;
+      flex: none;
+      width: 100%;
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 5px;
-      min-width: 0;
+      gap: 4px;
     }
+    .ctrl-btns {
+      gap: 4px;
+      width: 100%;
+      justify-content: center;
+    }
+    .ctrl-btn { padding: 6px 8px; }
+    .ctrl-play { width: 34px; height: 34px; margin: 0 6px; }
+    /* Fila 3: barra de progreso */
     .progress-row {
       display: flex;
       width: 100%;
-      gap: 6px;
+      gap: 7px;
+      align-items: center;
     }
     .prog-time { font-size: 0.62rem; width: 28px; }
-    .ctrl-btns { gap: 1px; }
-    .ctrl-btn { padding: 5px; }
-    /* Mostrar todos los botones de control en móvil */
+    /* Mostrar todos los botones — shuffle y repeat incluidos */
     .ctrl-btns > button:first-child,
     .ctrl-btns > button:last-child { display: flex; }
-    .ctrl-play { width: 32px; height: 32px; }
-    .np-heart { font-size: 0.9rem; padding: 3px; flex-shrink: 0; }
+    /* Ocultar volumen */
+    .vol-area { display: none; }
+    /* Padding inferior del main para que no tape los controles */
+    .main {
+      padding-bottom: calc(140px + env(safe-area-inset-bottom, 0px));
+    }
     .playlists-grid { grid-template-columns: repeat(auto-fill,minmax(155px,1fr)); gap: 10px; }
     .clouds-grid { grid-template-columns: 1fr; }
     .songs-grid-wrap { grid-template-columns: repeat(auto-fill,minmax(130px,1fr)); gap: 10px; padding: 0 0 16px; }
