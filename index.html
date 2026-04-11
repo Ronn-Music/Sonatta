@@ -3344,9 +3344,8 @@ async function playSongById(id){
 
   currentSongIdx=idx; const song=songs[idx];
 
-  // Pausar audio actual y esperar que se resuelva antes de continuar
+  // Pausar audio actual
   try { audioEl.pause(); } catch(e) {}
-  audioEl.src = ''; // Limpiar src para evitar conflictos de estado
 
   // Update player bar UI
   document.getElementById('npTitle').textContent=song.title;
