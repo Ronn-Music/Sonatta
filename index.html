@@ -2474,22 +2474,18 @@ async function loadClouds(){
   }
 }
 
-// ── CACHÉ LOCAL: guarda/carga canciones en localStorage por usuario ──
-const CACHE_VERSION = 3; // Bump para invalidar caché incompleto de 488 canciones
-function _cacheKey(){ return 'sonatta_songs_' + (currentUser ? currentUser.id : '') + '_v' + CACHE_VERSION; }
-function _cacheMetaKey(){ return 'sonatta_songs_meta_' + (currentUser ? currentUser.id : '') + '_v' + CACHE_VERSION; }
+// ── CACHÉ LOCAL ──
+// Usamos versión en la clave para poder invalidar fácilmente.
+// El caché solo se guarda cuando se cargan TODAS las canciones.
+// Durante un scan, el caché se borra para forzar recarga fresca.
+const CACHE_VERSION = 4;
+function _cacheKey(){ return 'snt_s_' + (currentUser ? currentUser.id : '') + '_v' + CACHE_VERSION; }
 
-function _saveCache(songsArr){
+function _saveCache(arr){
   try {
-    const key = _cacheKey();
-    const meta = { ts: Date.now(), count: songsArr.length };
-    localStorage.setItem(key, JSON.stringify(songsArr));
-    localStorage.setItem(_cacheMetaKey(), JSON.stringify(meta));
-    console.log('Cache guardado: ' + songsArr.length + ' canciones');
-  } catch(e) {
-    // localStorage lleno o bloqueado — ignorar silenciosamente
-    console.warn('Cache no disponible:', e.message);
-  }
+    localStorage.setItem(_cacheKey(), JSON.stringify(arr));
+    console.log('Cache guardado: ' + arr.length + ' canciones');
+  } catch(e){ console.warn('Cache write failed:', e.message); }
 }
 
 function _loadCache(){
@@ -2497,19 +2493,25 @@ function _loadCache(){
     const raw = localStorage.getItem(_cacheKey());
     if(!raw) return null;
     const arr = JSON.parse(raw);
-    if(!Array.isArray(arr) || !arr.length) return null;
-    return arr;
-  } catch(e) { return null; }
+    return (Array.isArray(arr) && arr.length > 0) ? arr : null;
+  } catch(e){ return null; }
 }
 
 function _clearCache(){
+  // Borrar TODAS las versiones del caché para este usuario
   try {
-    localStorage.removeItem(_cacheKey());
-    localStorage.removeItem(_cacheMetaKey());
-  } catch(e) {}
+    const uid = currentUser ? currentUser.id : '';
+    const toRemove = [];
+    for(let i = 0; i < localStorage.length; i++){
+      const k = localStorage.key(i);
+      if(k && (k.startsWith('snt_s_' + uid) || k.startsWith('sonatta_songs_' + uid))) toRemove.push(k);
+    }
+    toRemove.forEach(k => localStorage.removeItem(k));
+    console.log('Cache limpiado (' + toRemove.length + ' claves borradas)');
+  } catch(e){}
 }
 
-// ── Consulta una página de canciones con retry automático si hay timeout ──
+// ── Consulta una página de canciones con retry si hay timeout ──
 async function _fetchSongsPage(from, size, attempt){
   attempt = attempt || 1;
   const SELECT = 'id,title,artist,album,duration,file_path,file_url,cloud_provider,account_key,cover_url,liked,folder_path,folder_id';
@@ -2525,61 +2527,93 @@ async function _fetchSongsPage(from, size, attempt){
       error.message.includes('statement')
     );
     if(isTimeout && attempt <= 3){
-      const smallerSize = Math.max(50, Math.floor(size / 2));
-      console.warn('Timeout, reintentando con lote de ' + smallerSize + ' (intento ' + attempt + ')');
-      await new Promise(r => setTimeout(r, 500 * attempt));
-      return _fetchSongsPage(from, smallerSize, attempt + 1);
+      const smaller = Math.max(100, Math.floor(size / 2));
+      console.warn('Timeout, reintentando con lote=' + smaller + ' (intento ' + attempt + ')');
+      await new Promise(r => setTimeout(r, 600 * attempt));
+      return _fetchSongsPage(from, smaller, attempt + 1);
     }
-    return {data: null, error, pageSize: size};
+    return {data: null, error};
   }
-  return {data, error: null, pageSize: size};
+  return {data, error: null};
+}
+
+// ── Carga TODAS las canciones desde Supabase y guarda caché al final ──
+async function _loadAllFromSupabase(PAGE, onProgress){
+  let all = [];
+  let from = 0;
+  let errors = 0;
+  while(true){
+    await new Promise(r => setTimeout(r, 50));
+    const result = await _fetchSongsPage(from, PAGE, 1);
+    if(result.error){
+      errors++;
+      console.error('Fetch error lote ' + from + ':', result.error.message);
+      if(errors >= 3) break;
+      await new Promise(r => setTimeout(r, 1000 * errors));
+      continue;
+    }
+    errors = 0;
+    const data = result.data || [];
+    if(!data.length) break;
+    all = all.concat(_mapSongs(data));
+    from += data.length;
+    if(onProgress) onProgress(all.length);
+    if(data.length < PAGE) break;
+  }
+  return _dedupSongs(all);
 }
 
 async function loadSongsFromDB(){
-  let PAGE = 1000;
-
+  const PAGE = 1000;
   const overlay = document.getElementById('loadingOverlay');
   const countEl = document.getElementById('loadingCount');
   const textEl  = document.getElementById('loadingText');
   if(overlay) overlay.classList.remove('hidden');
-  if(countEl) countEl.textContent = '...';
-  if(textEl)  textEl.textContent  = 'Cargando biblioteca...';
 
-  // ── PASO 1: cargar caché local instantáneamente ──
+  // ── PASO 1: mostrar caché inmediatamente si existe ──
   const cached = _loadCache();
   if(cached){
     songs = cached;
+    songs.sort((a,b)=>(a.title||'').localeCompare(b.title||''));
     if(countEl) countEl.textContent = songs.length;
     if(textEl)  textEl.textContent  = 'canciones (caché)';
-    console.log('Caché local: ' + songs.length + ' canciones');
-    // Mostrar UI inmediatamente con el caché
-    songs.sort((a,b)=>(a.title||'').localeCompare(b.title||''));
     _hideLoadingOverlay();
     renderAllSongs(); renderAlbums(); renderArtists(); renderLiked();
     renderHomeSongs(); renderRecentGrid(); updateStats();
-    toast('⚡ ' + songs.length + ' canciones (caché) — sincronizando...');
+    toast('⚡ ' + songs.length + ' canciones — sincronizando...');
     if(window._activateTouchOnButtons) setTimeout(window._activateTouchOnButtons, 100);
-    // Sincronizar con Supabase en background sin bloquear la UI
-    _syncSongsBackground(PAGE, countEl);
+
+    // Sync en background: carga todo, guarda caché nuevo, actualiza UI
+    _loadAllFromSupabase(PAGE, (n) => {
+      if(countEl) countEl.textContent = n + ' ↓';
+    }).then(allSongs => {
+      if(allSongs.length > 0){
+        songs = allSongs;
+        songs.sort((a,b)=>(a.title||'').localeCompare(b.title||''));
+        _saveCache(songs);
+        renderAllSongs(); renderAlbums(); renderArtists(); renderLiked();
+        renderHomeSongs(); updateStats();
+        if(countEl) countEl.textContent = songs.length;
+        toast('✓ ' + songs.length + ' canciones sincronizadas');
+      }
+    });
     return;
   }
 
-  // ── PASO 2: sin caché — cargar primera página de Supabase ──
-  if(textEl) textEl.textContent = 'Conectando a tu biblioteca...';
-  const r1 = await _fetchSongsPage(0, PAGE, 1);
+  // ── PASO 2: sin caché — cargar todo desde Supabase ──
+  if(countEl) countEl.textContent = '...';
+  if(textEl)  textEl.textContent  = 'Conectando a tu biblioteca...';
 
+  // Primera página rápida para mostrar algo pronto
+  const r1 = await _fetchSongsPage(0, PAGE, 1);
   if(r1.error){
-    console.error('loadSongs err:', r1.error.message);
-    toast('\u274c Error leyendo canciones: ' + r1.error.message);
+    toast('❌ Error: ' + r1.error.message);
     songs=[]; _hideLoadingOverlay(); _checkEmptyLibrary(); return;
   }
-
   const firstPage = r1.data || [];
-
   if(!firstPage.length){
     _supabase.from('songs').select('id,user_id').limit(3).then(({data:td,error:te})=>{
-      if(te){ toast('\u274c Supabase SELECT error: '+te.message); }
-      else if(td&&td.length>0){ _showRLSBanner(); }
+      if(!te && td && td.length > 0) _showRLSBanner();
     });
     songs=[]; _hideLoadingOverlay(); _checkEmptyLibrary(); return;
   }
@@ -2587,93 +2621,44 @@ async function loadSongsFromDB(){
   songs = _dedupSongs(_mapSongs(firstPage));
   if(countEl) countEl.textContent = songs.length;
   if(textEl)  textEl.textContent  = 'canciones — cargando más...';
+  songs.sort((a,b)=>(a.title||'').localeCompare(b.title||''));
+  _hideLoadingOverlay();
+  renderAllSongs(); renderAlbums(); renderArtists();
   renderHomeSongs(); renderRecentGrid(); updateStats();
+  if(window._activateTouchOnButtons) setTimeout(window._activateTouchOnButtons, 100);
 
   if(firstPage.length < PAGE){
-    songs.sort((a,b)=>(a.title||'').localeCompare(b.title||''));
-    _hideLoadingOverlay();
-    renderAllSongs(); renderAlbums(); renderArtists();
     _saveCache(songs);
-    toast('\u2713 ' + songs.length + ' canciones listas');
-    if(window._activateTouchOnButtons) setTimeout(window._activateTouchOnButtons, 100);
+    toast('✓ ' + songs.length + ' canciones listas');
     return;
   }
 
-  // Seguir cargando en background
-  _loadSongsBackground(firstPage.length, PAGE, countEl, textEl);
-}
-
-// ── Sincronización en background cuando ya hay caché ──
-async function _syncSongsBackground(PAGE, countEl){
-  let allFromDB = [];
-  let from = 0;
-  let consecutiveErrors = 0;
-  while(true){
-    await new Promise(r => setTimeout(r, 80));
-    const result = await _fetchSongsPage(from, PAGE, 1);
-    if(result.error){
-      consecutiveErrors++;
-      if(consecutiveErrors >= 3) break;
-      await new Promise(r => setTimeout(r, 800 * consecutiveErrors));
-      continue;
+  // Hay más páginas — cargar el resto en background
+  toast('⏳ ' + songs.length + ' canciones — cargando más...');
+  _loadAllFromSupabase(PAGE, (n) => {
+    if(countEl) countEl.textContent = n + ' ↓';
+    // Mostrar progreso parcial cada 1000 canciones
+    if(n % 1000 === 0){
+      updateStats();
     }
-    consecutiveErrors = 0;
-    const data = result.data || [];
-    if(!data.length) break;
-    allFromDB = allFromDB.concat(_mapSongs(data));
-    from += data.length;
-    if(data.length < PAGE) break;
-  }
-  if(allFromDB.length > 0){
-    songs = _dedupSongs(allFromDB);
-    songs.sort((a,b)=>(a.title||'').localeCompare(b.title||''));
-    _saveCache(songs);
-    renderAllSongs(); renderAlbums(); renderArtists(); renderLiked();
-    renderHomeSongs(); updateStats();
-    if(countEl) countEl.textContent = songs.length;
-    console.log('Sync completo: ' + songs.length + ' canciones');
-    toast('\u2713 Biblioteca actualizada: ' + songs.length + ' canciones');
-  }
+  }).then(allSongs => {
+    if(allSongs.length >= songs.length){
+      songs = allSongs;
+      songs.sort((a,b)=>(a.title||'').localeCompare(b.title||''));
+      _saveCache(songs);
+      renderAllSongs(); renderAlbums(); renderArtists(); renderLiked();
+      renderHomeSongs(); updateStats();
+      if(countEl) countEl.textContent = songs.length;
+      toast('✓ ' + songs.length + ' canciones listas');
+      if(window._activateTouchOnButtons) setTimeout(window._activateTouchOnButtons, 100);
+    }
+  });
 }
 
-
+// _loadSongsBackground ya no se usa — reemplazado por _loadAllFromSupabase
 async function _loadSongsBackground(from, PAGE, countEl, textEl){
-  // Mostrar UI inmediatamente con lo que ya tenemos
-  songs.sort((a,b)=>(a.title||'').localeCompare(b.title||''));
-  _hideLoadingOverlay();
-  renderAllSongs(); renderAlbums(); renderArtists(); renderLiked();
-  updateStats();
-  toast('\u23f3 ' + songs.length + ' canciones listas, cargando resto...');
-  if(window._activateTouchOnButtons) setTimeout(window._activateTouchOnButtons, 100);
-
-  // Seguir cargando en background sin bloquear la UI
-  let consecutiveErrors = 0;
-  while(true){
-    await new Promise(r => setTimeout(r, 30));
-    const result = await _fetchSongsPage(from, PAGE, 1);
-    if(result.error){
-      consecutiveErrors++;
-      if(consecutiveErrors >= 3) break;
-      await new Promise(r => setTimeout(r, 800 * consecutiveErrors));
-      continue;
-    }
-    consecutiveErrors = 0;
-    const data = result.data || [];
-    if(!data.length) break;
-    songs = _dedupSongs(songs.concat(_mapSongs(data)));
-    from += data.length;
-    if(countEl) countEl.textContent = songs.length;
-    updateStats();
-    if(data.length < PAGE) break;
-  }
-
-  // Todo cargado
-  songs.sort((a,b)=>(a.title||'').localeCompare(b.title||''));
-  _saveCache(songs); // Guardar caché completo ahora que tenemos todas las canciones
-  renderAllSongs(); renderAlbums(); renderArtists(); renderLiked(); updateStats();
-  toast('\u2713 ' + songs.length + ' canciones listas');
+  // Legacy stub — no hace nada, la lógica está en loadSongsFromDB
 }
-
 function _hideLoadingOverlay(){
   const overlay = document.getElementById('loadingOverlay');
   if(overlay){
