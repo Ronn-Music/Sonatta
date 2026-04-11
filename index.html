@@ -2474,40 +2474,62 @@ async function loadClouds(){
   }
 }
 
-async function loadSongsFromDB(){
-  // Usar lotes más pequeños para evitar statement timeout en Supabase
-  const PAGE = 500;
+// ── Consulta una página de canciones con retry automático si hay timeout ──
+async function _fetchSongsPage(from, size, attempt){
+  attempt = attempt || 1;
+  const SELECT = 'id,title,artist,album,duration,file_path,file_url,cloud_provider,account_key,cover_url,liked,folder_path,folder_id';
+  const {data, error} = await _supabase.from('songs')
+    .select(SELECT)
+    .eq('user_id', currentUser.id)
+    .range(from, from + size - 1);
 
-  // Mostrar overlay de carga
+  if(error){
+    const isTimeout = error.message && (
+      error.message.includes('timeout') ||
+      error.message.includes('canceling') ||
+      error.message.includes('statement')
+    );
+    // Retry con lote más pequeño si hay timeout (hasta 3 intentos)
+    if(isTimeout && attempt <= 3){
+      const smallerSize = Math.max(50, Math.floor(size / 2));
+      console.warn('Timeout en lote ' + from + '-' + (from+size-1) + ', reintentando con lote de ' + smallerSize + ' (intento ' + attempt + ')');
+      await new Promise(r => setTimeout(r, 500 * attempt));
+      return _fetchSongsPage(from, smallerSize, attempt + 1);
+    }
+    return {data: null, error, pageSize: size};
+  }
+  return {data, error: null, pageSize: size};
+}
+
+async function loadSongsFromDB(){
+  // SIN .order() en Supabase — evita statement timeout con miles de canciones.
+  // Ordenamiento se hace localmente en memoria al final.
+  let PAGE = 1000; // Lote grande — el índice en user_id evita timeout
+
   const overlay = document.getElementById('loadingOverlay');
   const countEl = document.getElementById('loadingCount');
   const textEl  = document.getElementById('loadingText');
   if(overlay) overlay.classList.remove('hidden');
-
-  // --- Página 1: mostrar algo lo antes posible ---
   if(countEl) countEl.textContent = '...';
   if(textEl)  textEl.textContent  = 'Conectando a tu biblioteca...';
 
-  // NOTA: Se eliminó .order() de las consultas a Supabase para evitar
-  // "statement timeout" que ocurre al ordenar miles de canciones en el servidor.
-  // El ordenamiento se realiza localmente en memoria después de cargar.
-  const {data: firstPage, error: e1} = await _supabase.from('songs')
-    .select('id,title,artist,album,duration,file_path,file_url,cloud_provider,account_key,cover_url,liked,folder_path,folder_id')
-    .eq('user_id', currentUser.id)
-    .range(0, PAGE - 1);
+  // --- Primera página ---
+  const r1 = await _fetchSongsPage(0, PAGE, 1);
 
-  if(e1){
-    console.error('loadSongs err:', e1.message);
-    toast('\u274c Error leyendo canciones: '+e1.message);
+  if(r1.error){
+    console.error('loadSongs err:', r1.error.message);
+    toast('\u274c Error leyendo canciones: ' + r1.error.message);
     songs=[]; _hideLoadingOverlay(); _checkEmptyLibrary(); return;
   }
-  if(!firstPage || !firstPage.length){
-    // Diagn\u00f3stico: verificar si hay canciones en BD sin filtro de user_id
+
+  const firstPage = r1.data || [];
+
+  if(!firstPage.length){
     _supabase.from('songs').select('id,user_id').limit(3).then(({data:td,error:te})=>{
       if(te){ toast('\u274c Supabase SELECT error: '+te.message); console.error('SELECT test error:',te); }
       else if(td&&td.length>0){
-        console.warn('PROBLEMA RLS: hay canciones en la BD pero el filtro user_id devuelve 0. Falta pol\u00edtica SELECT en Supabase.');
-        toast('\u26a0 RLS: canciones en BD sin acceso. Ve a Supabase \u2192 Table Editor \u2192 songs \u2192 RLS \u2192 agrega SELECT policy');
+        console.warn('PROBLEMA RLS: canciones en BD pero user_id no las devuelve. Falta política SELECT.');
+        toast('\u26a0 RLS: canciones en BD sin acceso. Ve a Supabase \u2192 songs \u2192 RLS \u2192 agrega SELECT policy');
         _showRLSBanner();
       }
     });
@@ -2516,55 +2538,68 @@ async function loadSongsFromDB(){
 
   songs = _dedupSongs(_mapSongs(firstPage));
   if(countEl) countEl.textContent = songs.length;
-  if(textEl)  textEl.textContent  = 'canciones cargadas';
-  console.log('Songs loaded:', songs.length);
+  if(textEl)  textEl.textContent  = 'canciones — cargando más...';
+  console.log('Songs page 1 loaded:', songs.length);
 
-  // Si hay menos de PAGE canciones ya terminamos — ordenar y renderizar
+  // Renderizar inmediatamente lo que tenemos
+  renderHomeSongs(); renderRecentGrid(); updateStats();
+
+  // Si hay menos que PAGE ya terminamos
   if(firstPage.length < PAGE){
     songs.sort((a,b)=>(a.title||'').localeCompare(b.title||''));
     _hideLoadingOverlay();
-    renderHomeSongs(); renderRecentGrid(); updateStats();
     await new Promise(r => setTimeout(r, 20));
-    renderAllSongs();
-    renderAlbums(); renderArtists();
+    renderAllSongs(); renderAlbums(); renderArtists();
     toast('✓ ' + songs.length + ' canciones listas');
     if(window._activateTouchOnButtons) setTimeout(window._activateTouchOnButtons, 100);
     return;
   }
 
-  // Hay más páginas — seguir cargando en background
-  _loadSongsBackground(PAGE, PAGE, countEl, textEl);
+  // Seguir cargando en background
+  _loadSongsBackground(firstPage.length, PAGE, countEl, textEl);
 }
 
 async function _loadSongsBackground(from, PAGE, countEl, textEl){
+  let consecutiveErrors = 0;
+
   while(true){
-    await new Promise(r => setTimeout(r, 120));
+    await new Promise(r => setTimeout(r, 50)); // Pausa mínima entre lotes
 
-    const {data, error} = await _supabase.from('songs')
-      .select('id,title,artist,album,duration,file_path,file_url,cloud_provider,account_key,cover_url,liked,folder_path,folder_id')
-      .eq('user_id', currentUser.id)
-      .range(from, from + PAGE - 1);
+    const result = await _fetchSongsPage(from, PAGE, 1);
 
-    if(error){ console.error('loadSongs bg err:', error.message); break; }
-    if(!data || !data.length) break;
+    if(result.error){
+      consecutiveErrors++;
+      console.error('loadSongs bg err:', result.error.message, '(error #' + consecutiveErrors + ')');
+      if(consecutiveErrors >= 3) break; // Parar tras 3 errores seguidos
+      await new Promise(r => setTimeout(r, 1000 * consecutiveErrors));
+      continue;
+    }
+
+    consecutiveErrors = 0;
+    const data = result.data || [];
+    if(!data.length) break;
 
     songs = _dedupSongs(songs.concat(_mapSongs(data)));
-    from += PAGE;
-    console.log('Songs loaded:', songs.length);
+    from += data.length; // Avanzar según lo que realmente vino (puede ser menos si hubo retry con lote menor)
+    console.log('Songs total loaded:', songs.length);
     if(countEl) countEl.textContent = songs.length;
+    if(textEl)  textEl.textContent  = 'canciones — cargando más...';
     updateStats(); renderHomeSongs();
 
     if(data.length < PAGE) break;
   }
 
-  // Todas las canciones cargadas — ordenar localmente y renderizar todo
+  // Finalizar: ordenar localmente y renderizar todo
   songs.sort((a,b)=>(a.title||'').localeCompare(b.title||''));
   _hideLoadingOverlay();
   await new Promise(r => setTimeout(r, 30));
   renderAllSongs();
   renderAlbums(); renderArtists(); renderLiked();
   updateStats();
-  toast('✓ ' + songs.length + ' canciones listas');
+  const msg = songs.length > 0
+    ? '✓ ' + songs.length + ' canciones listas'
+    : '⚠ No se pudieron cargar canciones — intenta recargar';
+  toast(msg);
   if(window._activateTouchOnButtons) setTimeout(window._activateTouchOnButtons, 100);
 }
 
