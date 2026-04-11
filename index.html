@@ -2493,8 +2493,8 @@ async function loadSongsFromDB(){
     .order('title', {ascending: true})
     .range(0, PAGE - 1);
 
-  if(e1){ console.error('loadSongs err:', e1.message); songs=[]; _hideLoadingOverlay(); return; }
-  if(!firstPage || !firstPage.length){ songs=[]; _hideLoadingOverlay(); return; }
+  if(e1){ console.error('loadSongs err:', e1.message); songs=[]; _hideLoadingOverlay(); _checkEmptyLibrary(); return; }
+  if(!firstPage || !firstPage.length){ songs=[]; _hideLoadingOverlay(); _checkEmptyLibrary(); return; }
 
   songs = _dedupSongs(_mapSongs(firstPage));
   if(countEl) countEl.textContent = songs.length;
@@ -2557,6 +2557,42 @@ function _hideLoadingOverlay(){
     renderHomeSongs(); renderRecentGrid(); updateStats();
     setTimeout(()=>{ overlay.style.display='none'; }, 450);
   }
+}
+
+// ── Detecta biblioteca vacía con nubes conectadas y ofrece escanear ──
+async function _checkEmptyLibrary(){
+  // Esperar a que loadClouds haya terminado y los datos estén en memoria
+  const accounts = connectedClouds._accounts || [];
+  const hasActiveCloud = accounts.some(a => !a.expired);
+  if(!hasActiveCloud) return; // sin nubes — el mensaje "Conecta una nube" es correcto
+
+  // Hay nubes conectadas pero 0 canciones — mostrar banner de ayuda
+  const homeSongsList = document.getElementById('homeSongsList');
+  if(homeSongsList){
+    homeSongsList.innerHTML =
+      '<div style="padding:28px 20px;text-align:center;color:var(--text2);line-height:1.7">'
+      + '<div style="font-size:2rem;margin-bottom:10px">📂</div>'
+      + '<div style="font-weight:600;margin-bottom:6px">Tu biblioteca está vacía</div>'
+      + '<div style="font-size:0.82rem;color:var(--text3);margin-bottom:18px">Tienes nubes conectadas pero no hay canciones escaneadas aún.</div>'
+      + '<button onclick="_rescanAllClouds()" style="background:var(--accent);border:none;border-radius:10px;color:white;padding:11px 22px;font-family:\'Syne\',sans-serif;font-weight:700;font-size:0.85rem;cursor:pointer">↻ Escanear nubes ahora</button>'
+      + '</div>';
+  }
+  toast('⚠ Nubes conectadas pero sin canciones — usa ↻ Escanear');
+}
+
+// ── Relanza el escaneo de todas las cuentas activas ──
+async function _rescanAllClouds(){
+  const accounts = (connectedClouds._accounts || []).filter(a => !a.expired && a.provider === 'gdrive');
+  if(!accounts.length){ toast('⚠ No hay cuentas activas de Google Drive'); return; }
+  toast('⏳ Iniciando escaneo...');
+  for(const acc of accounts){
+    const tok = connectedClouds['_tok_'+acc.account_key] || connectedClouds['_tok_gdrive'];
+    if(!tok){ toast('⚠ Sin token para '+acc.account_label+' — reconecta'); continue; }
+    await scanGDrive(tok, acc.account_key, false);
+  }
+  await loadSongsFromDB();
+  renderAll();
+  toast('✓ Escaneo completado — '+ songs.length + ' canciones encontradas');
 }
 
 // ── DEDUP EN MEMORIA: elimina duplicados por fileId, conservando el mejor registro ──
@@ -3282,10 +3318,8 @@ async function playSongById(id){
   }
 
   // ── Función central: recibe una respuesta OK y la reproduce via streaming ──
-  async function _streamResponse(res, usedToken){
+  async function _streamResponse(res){
     if(myRequestId !== _playRequestId) return;
-
-    // Limpiar blob anterior
     if(audioEl._blobUrl){ URL.revokeObjectURL(audioEl._blobUrl); audioEl._blobUrl=null; }
     if(audioEl._ms){ try{audioEl._ms.endOfStream();}catch(e){} audioEl._ms=null; }
 
@@ -3293,7 +3327,6 @@ async function playSongById(id){
     const msSupported = window.MediaSource && MediaSource.isTypeSupported(mimeType);
 
     if(msSupported){
-      // ── MODO STREAMING: MediaSource — reproduce mientras descarga ──
       const ms = new MediaSource();
       audioEl._ms = ms;
       const msUrl = URL.createObjectURL(ms);
@@ -3304,12 +3337,7 @@ async function playSongById(id){
           URL.revokeObjectURL(msUrl);
           let sb;
           try { sb = ms.addSourceBuffer(mimeType); }
-          catch(e){
-            // MIME no soportado por MediaSource — caer en blob
-            try{ms.endOfStream();}catch(e2){}
-            resolve('fallback');
-            return;
-          }
+          catch(e){ try{ms.endOfStream();}catch(e2){} resolve('fallback'); return; }
 
           toast('▶ '+song.title+' — '+song.artist);
           try {
@@ -3329,24 +3357,15 @@ async function playSongById(id){
               try{ chunk = await reader.read(); }
               catch(e){ try{ms.endOfStream();}catch(e2){} resolve('done'); return; }
               if(chunk.done){
-                // Esperar a que el buffer esté listo antes de cerrar
-                const waitReady=()=>{
-                  if(sb.updating){ setTimeout(waitReady,50); return; }
-                  try{ms.endOfStream();}catch(e){}
-                  resolve('done');
-                };
+                const waitReady=()=>{ if(sb.updating){setTimeout(waitReady,50);return;} try{ms.endOfStream();}catch(e){} resolve('done'); };
                 waitReady(); return;
               }
-              // Esperar si el buffer está ocupado
               if(sb.updating) await new Promise(r=>sb.addEventListener('updateend',r,{once:true}));
               if(myRequestId!==_playRequestId){ reader.cancel(); try{ms.endOfStream();}catch(e){} resolve('abort'); return; }
               if(ms.readyState!=='open'){ resolve('done'); return; }
               try{ sb.appendBuffer(chunk.value); }
               catch(e){
-                // QuotaExceededError u otro — ignorar y continuar
-                console.warn('appendBuffer error:',e.name);
                 if(e.name==='QuotaExceededError'){
-                  // Esperar un poco y reintentar (el audio ya fue reproducido)
                   await new Promise(r=>setTimeout(r,300));
                   if(sb.updating) await new Promise(r=>sb.addEventListener('updateend',r,{once:true}));
                   try{ sb.appendBuffer(chunk.value); }catch(e2){}
@@ -3357,9 +3376,8 @@ async function playSongById(id){
           pump();
         }, {once:true});
       });
-
     } else {
-      // ── MODO FALLBACK: blob completo (para FLAC/OGG sin soporte MediaSource) ──
+      // Fallback blob (FLAC/OGG sin soporte MediaSource)
       const blob = await res.blob();
       if(myRequestId !== _playRequestId) return;
       audioEl._blobUrl = URL.createObjectURL(blob);
@@ -3373,7 +3391,7 @@ async function playSongById(id){
       } catch(playErr){
         if(playErr.name==='NotAllowedError'){ isPlaying=false; updatePlayBtn(); toast('Toca ▶ para reproducir'); }
         else if(playErr.name==='AbortError'){ console.log('play() aborted'); }
-        else { console.error('play() failed:',playErr); toast('Error al reproducir: '+playErr.message); }
+        else { console.error('play() failed:',playErr); toast('Error al reproducir: '+playErr.message); isPlaying=false; updatePlayBtn(); }
       }
     }
   }
@@ -3383,13 +3401,14 @@ async function playSongById(id){
       headers: { Authorization: 'Bearer ' + token }
     });
 
+    // Si esta solicitud ya fue superada por una más nueva, abandonar
     if(myRequestId !== _playRequestId) return;
 
     if (!res.ok) {
       if (res.status === 401 || res.status === 403) {
         console.warn('Token invalido ('+res.status+') para', song.accountKey||'gdrive');
 
-        // Probar tokens alternativos antes de hacer refresh
+        // ANTES de hacer refresh, probar todos los demás tokens disponibles
         const allTokKeys=Object.keys(connectedClouds).filter(k=>
           k.startsWith('_tok_')&&k!=='_tok_gdrive'&&connectedClouds[k]&&connectedClouds[k]!==token);
         for(const tk of allTokKeys){
@@ -3402,7 +3421,7 @@ async function playSongById(id){
               song.accountKey=correctKey;
               connectedClouds['_tok_'+(song.accountKey||'')]=altToken;
               if(myRequestId!==_playRequestId) return;
-              await _streamResponse(altRes, altToken);
+              await _streamResponse(altRes);
               return;
             }
           }catch(e){}
@@ -3425,7 +3444,7 @@ async function playSongById(id){
       throw new Error('HTTP ' + res.status);
     }
 
-    await _streamResponse(res, token);
+    await _streamResponse(res);
 
   } catch(fetchErr){
     if(myRequestId !== _playRequestId) return;
