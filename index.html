@@ -3274,20 +3274,122 @@ async function playSongById(id){
   toast('⏳ Cargando '+song.title+'...');
   if(song.fileId) _loadID3Cover(song.fileId, song.accountKey);
 
+  // ── Determinar MIME type por extensión ──
+  function _mimeFromPath(fp){
+    if(!fp) return 'audio/mpeg';
+    const ext=(fp.split('.').pop()||'').toLowerCase();
+    return {mp3:'audio/mpeg',flac:'audio/flac',wav:'audio/wav',ogg:'audio/ogg',m4a:'audio/mp4',mp4:'audio/mp4'}[ext]||'audio/mpeg';
+  }
+
+  // ── Función central: recibe una respuesta OK y la reproduce via streaming ──
+  async function _streamResponse(res, usedToken){
+    if(myRequestId !== _playRequestId) return;
+
+    // Limpiar blob anterior
+    if(audioEl._blobUrl){ URL.revokeObjectURL(audioEl._blobUrl); audioEl._blobUrl=null; }
+    if(audioEl._ms){ try{audioEl._ms.endOfStream();}catch(e){} audioEl._ms=null; }
+
+    const mimeType = _mimeFromPath(song.filePath||song.fileUrl||'');
+    const msSupported = window.MediaSource && MediaSource.isTypeSupported(mimeType);
+
+    if(msSupported){
+      // ── MODO STREAMING: MediaSource — reproduce mientras descarga ──
+      const ms = new MediaSource();
+      audioEl._ms = ms;
+      const msUrl = URL.createObjectURL(ms);
+      audioEl.src = msUrl;
+
+      await new Promise((resolve)=>{
+        ms.addEventListener('sourceopen', async ()=>{
+          URL.revokeObjectURL(msUrl);
+          let sb;
+          try { sb = ms.addSourceBuffer(mimeType); }
+          catch(e){
+            // MIME no soportado por MediaSource — caer en blob
+            try{ms.endOfStream();}catch(e2){}
+            resolve('fallback');
+            return;
+          }
+
+          toast('▶ '+song.title+' — '+song.artist);
+          try {
+            await audioEl.play();
+            if(myRequestId!==_playRequestId){ audioEl.pause(); resolve('abort'); return; }
+            isPlaying=true; updatePlayBtn(); syncNpModal();
+          } catch(pe){
+            if(pe.name==='NotAllowedError'){ isPlaying=false; updatePlayBtn(); toast('Toca ▶ para reproducir'); }
+            else if(pe.name!=='AbortError'){ toast('Error al reproducir: '+pe.message); isPlaying=false; updatePlayBtn(); }
+          }
+
+          const reader = res.body.getReader();
+          const pump = async ()=>{
+            while(true){
+              if(myRequestId!==_playRequestId){ reader.cancel(); try{ms.endOfStream();}catch(e){} resolve('abort'); return; }
+              let chunk;
+              try{ chunk = await reader.read(); }
+              catch(e){ try{ms.endOfStream();}catch(e2){} resolve('done'); return; }
+              if(chunk.done){
+                // Esperar a que el buffer esté listo antes de cerrar
+                const waitReady=()=>{
+                  if(sb.updating){ setTimeout(waitReady,50); return; }
+                  try{ms.endOfStream();}catch(e){}
+                  resolve('done');
+                };
+                waitReady(); return;
+              }
+              // Esperar si el buffer está ocupado
+              if(sb.updating) await new Promise(r=>sb.addEventListener('updateend',r,{once:true}));
+              if(myRequestId!==_playRequestId){ reader.cancel(); try{ms.endOfStream();}catch(e){} resolve('abort'); return; }
+              if(ms.readyState!=='open'){ resolve('done'); return; }
+              try{ sb.appendBuffer(chunk.value); }
+              catch(e){
+                // QuotaExceededError u otro — ignorar y continuar
+                console.warn('appendBuffer error:',e.name);
+                if(e.name==='QuotaExceededError'){
+                  // Esperar un poco y reintentar (el audio ya fue reproducido)
+                  await new Promise(r=>setTimeout(r,300));
+                  if(sb.updating) await new Promise(r=>sb.addEventListener('updateend',r,{once:true}));
+                  try{ sb.appendBuffer(chunk.value); }catch(e2){}
+                }
+              }
+            }
+          };
+          pump();
+        }, {once:true});
+      });
+
+    } else {
+      // ── MODO FALLBACK: blob completo (para FLAC/OGG sin soporte MediaSource) ──
+      const blob = await res.blob();
+      if(myRequestId !== _playRequestId) return;
+      audioEl._blobUrl = URL.createObjectURL(blob);
+      audioEl.src = audioEl._blobUrl;
+      audioEl.load();
+      toast('▶ '+song.title+' — '+song.artist);
+      try {
+        await audioEl.play();
+        if(myRequestId !== _playRequestId){ audioEl.pause(); return; }
+        isPlaying=true; updatePlayBtn(); syncNpModal();
+      } catch(playErr){
+        if(playErr.name==='NotAllowedError'){ isPlaying=false; updatePlayBtn(); toast('Toca ▶ para reproducir'); }
+        else if(playErr.name==='AbortError'){ console.log('play() aborted'); }
+        else { console.error('play() failed:',playErr); toast('Error al reproducir: '+playErr.message); }
+      }
+    }
+  }
+
   try {
     const res = await fetch(fileUrl, {
       headers: { Authorization: 'Bearer ' + token }
     });
 
-    // Si esta solicitud ya fue superada por una más nueva, abandonar
     if(myRequestId !== _playRequestId) return;
 
     if (!res.ok) {
       if (res.status === 401 || res.status === 403) {
         console.warn('Token invalido ('+res.status+') para', song.accountKey||'gdrive');
 
-        // ANTES de hacer refresh, probar todos los demás tokens disponibles
-        // (el archivo puede pertenecer a una cuenta diferente a la registrada en song.accountKey)
+        // Probar tokens alternativos antes de hacer refresh
         const allTokKeys=Object.keys(connectedClouds).filter(k=>
           k.startsWith('_tok_')&&k!=='_tok_gdrive'&&connectedClouds[k]&&connectedClouds[k]!==token);
         for(const tk of allTokKeys){
@@ -3296,36 +3398,20 @@ async function playSongById(id){
           try{
             const altRes=await fetch(fileUrl,{headers:{Authorization:'Bearer '+altToken}});
             if(altRes.ok){
-              // Este token funciona — actualizar accountKey del song en memoria
               const correctKey=tk.replace('_tok_','');
               song.accountKey=correctKey;
               connectedClouds['_tok_'+(song.accountKey||'')]=altToken;
-              // Continuar con este blob
               if(myRequestId!==_playRequestId) return;
-              const blob2=await altRes.blob();
-              if(myRequestId!==_playRequestId) return;
-              if(audioEl._blobUrl){URL.revokeObjectURL(audioEl._blobUrl);audioEl._blobUrl=null;}
-              audioEl._blobUrl=URL.createObjectURL(blob2);
-              audioEl.src=audioEl._blobUrl; audioEl.load();
-              toast('▶ '+song.title+' — '+song.artist);
-              try{
-                await audioEl.play();
-                if(myRequestId!==_playRequestId){audioEl.pause();return;}
-                isPlaying=true; updatePlayBtn(); syncNpModal();
-              }catch(pe){
-                if(pe.name!=='AbortError') toast('Error al reproducir: '+pe.message);
-                isPlaying=false; updatePlayBtn();
-              }
+              await _streamResponse(altRes, altToken);
               return;
             }
-          }catch(e){ /* continuar con el siguiente token */ }
+          }catch(e){}
         }
 
-        // Ningún token funciona — intentar refresh del token original
+        // Refresh del token original
         const refreshed=await autoRefreshToken(song.accountKey||'gdrive', song.accountKey||'Google Drive');
         if(myRequestId !== _playRequestId) return;
         if(refreshed){ playSongById(id); return; }
-        // Refresh fallido y usuario esta intentando reproducir — ahora si mostrar banner
         isPlaying=false; updatePlayBtn();
         showTokenExpiredBanner(song.accountKey||'gdrive', song.accountKey||'Google Drive');
         return;
@@ -3339,37 +3425,13 @@ async function playSongById(id){
       throw new Error('HTTP ' + res.status);
     }
 
-    const blob = await res.blob();
+    await _streamResponse(res, token);
 
-    // Verificar de nuevo que esta solicitud sigue siendo válida
-    if(myRequestId !== _playRequestId) return;
-
-    if (audioEl._blobUrl) { URL.revokeObjectURL(audioEl._blobUrl); audioEl._blobUrl = null; }
-    audioEl._blobUrl = URL.createObjectURL(blob);
-    audioEl.src = audioEl._blobUrl;
-    audioEl.load();
-
-    toast('▶ '+song.title+' — '+song.artist);
-    try {
-      await audioEl.play();
-      if(myRequestId !== _playRequestId){ audioEl.pause(); return; }
-      isPlaying=true; updatePlayBtn(); syncNpModal();
-    } catch(playErr){
-      if(playErr.name==='NotAllowedError'){
-        isPlaying=false; updatePlayBtn();
-        toast('Toca ▶ para reproducir');
-      } else if(playErr.name==='AbortError'){
-        // Interrumpido por nueva canción — normal, no mostrar error
-        console.log('play() aborted (new song requested)');
-      } else {
-        console.error('play() failed:',playErr);
-        toast('Error al reproducir: '+playErr.message);
-      }
-    }
   } catch(fetchErr){
     if(myRequestId !== _playRequestId) return;
     console.error('stream failed:',fetchErr);
     toast('Error de red: '+fetchErr.message);
+    isPlaying=false; updatePlayBtn();
   }
 }
 
