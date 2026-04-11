@@ -2493,8 +2493,23 @@ async function loadSongsFromDB(){
     .order('title', {ascending: true})
     .range(0, PAGE - 1);
 
-  if(e1){ console.error('loadSongs err:', e1.message); songs=[]; _hideLoadingOverlay(); _checkEmptyLibrary(); return; }
-  if(!firstPage || !firstPage.length){ songs=[]; _hideLoadingOverlay(); _checkEmptyLibrary(); return; }
+  if(e1){
+    console.error('loadSongs err:', e1.message);
+    toast('\u274c Error leyendo canciones: '+e1.message);
+    songs=[]; _hideLoadingOverlay(); _checkEmptyLibrary(); return;
+  }
+  if(!firstPage || !firstPage.length){
+    // Diagn\u00f3stico: verificar si hay canciones en BD sin filtro de user_id
+    _supabase.from('songs').select('id,user_id').limit(3).then(({data:td,error:te})=>{
+      if(te){ toast('\u274c Supabase SELECT error: '+te.message); console.error('SELECT test error:',te); }
+      else if(td&&td.length>0){
+        console.warn('PROBLEMA RLS: hay canciones en la BD pero el filtro user_id devuelve 0. Falta pol\u00edtica SELECT en Supabase.');
+        toast('\u26a0 RLS: canciones en BD sin acceso. Ve a Supabase \u2192 Table Editor \u2192 songs \u2192 RLS \u2192 agrega SELECT policy');
+        _showRLSBanner();
+      }
+    });
+    songs=[]; _hideLoadingOverlay(); _checkEmptyLibrary(); return;
+  }
 
   songs = _dedupSongs(_mapSongs(firstPage));
   if(countEl) countEl.textContent = songs.length;
@@ -2556,6 +2571,27 @@ function _hideLoadingOverlay(){
     // Renderizar contenido visible antes de quitar el overlay
     renderHomeSongs(); renderRecentGrid(); updateStats();
     setTimeout(()=>{ overlay.style.display='none'; }, 450);
+  }
+}
+
+// ── Muestra banner de ayuda para problema de RLS en Supabase ──
+function _showRLSBanner(){
+  const homeSongsList = document.getElementById('homeSongsList');
+  if(homeSongsList){
+    homeSongsList.innerHTML =
+      '<div style="padding:24px 20px;text-align:left;color:var(--text2);line-height:1.8;background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,0.2);border-radius:14px;margin:4px">'
+      + '<div style="font-size:1.2rem;margin-bottom:8px">⚠ Problema de permisos en Supabase</div>'
+      + '<div style="font-size:0.82rem;color:var(--text3);margin-bottom:14px">Las canciones están guardadas en la base de datos pero Supabase no te permite leerlas.<br>Esto se debe a que falta una política <b>SELECT</b> en Row Level Security (RLS).</div>'
+      + '<div style="font-size:0.8rem;font-weight:700;margin-bottom:8px;color:var(--yellow)">Solución — agregar política en Supabase:</div>'
+      + '<div style="font-size:0.78rem;color:var(--text2);font-family:monospace;background:var(--bg3);padding:12px;border-radius:8px;margin-bottom:14px;word-break:break-all">'
+      + 'Ve a <b>supabase.com</b> → tu proyecto → <b>Table Editor</b> → tabla <b>songs</b><br>'
+      + '→ <b>RLS</b> → <b>Add policy</b> → For: <b>SELECT</b><br>'
+      + '→ Using expression: <code>auth.uid() = user_id</code>'
+      + '</div>'
+      + '<div style="font-size:0.78rem;color:var(--text3);margin-bottom:14px">O ve a <b>SQL Editor</b> y ejecuta:<br>'
+      + '<code style="background:var(--bg3);padding:4px 8px;border-radius:6px;display:inline-block;margin-top:4px">CREATE POLICY \"read_own_songs\" ON songs FOR SELECT USING (auth.uid() = user_id);</code></div>'
+      + '<button onclick="loadSongsFromDB().then(renderAll)" style="background:var(--accent);border:none;border-radius:10px;color:white;padding:10px 22px;font-family:Syne,sans-serif;font-weight:700;font-size:0.85rem;cursor:pointer">↻ Reintentar después de aplicar</button>'
+      + '</div>';
   }
 }
 
@@ -4098,6 +4134,22 @@ async function scanGDrive(token, accountKey, deleteFirst=true){
       if(i%(BATCH*5)===0&&i>0) toast('⏳ '+saved+'/'+allFiles.length+'...');
     }
     toast('✓ '+saved+' canciones guardadas');
+
+    // Verificación post-scan: comprobar que el SELECT devuelve las canciones recién insertadas
+    if(saved > 0){
+      const{data:verif,error:verifErr}=await _supabase.from('songs')
+        .select('id').eq('user_id',currentUser.id).eq('cloud_provider','gdrive').limit(5);
+      if(verifErr){
+        console.error('Verificación post-scan error:',verifErr.message);
+        toast('⚠ Canciones guardadas pero error al leer: '+verifErr.message);
+      } else if(!verif||!verif.length){
+        console.warn('POST-SCAN VERIFY: 0 rows devueltas — posible problema de RLS en Supabase.');
+        toast('⚠ Guardadas pero no se leen — falta política SELECT en Supabase RLS');
+        _showRLSBanner();
+      } else {
+        console.log('Post-scan verify OK: '+verif.length+' canciones legibles');
+      }
+    }
   } catch(err){ console.error('scanGDrive:',err); toast('Error: '+err.message); }
 }
 
