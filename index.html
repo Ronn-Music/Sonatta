@@ -2515,6 +2515,8 @@ function _clearCache(){
 async function _fetchSongsPage(from, size, attempt){
   attempt = attempt || 1;
   const SELECT = 'id,title,artist,album,duration,file_path,file_url,cloud_provider,account_key,cover_url,liked,folder_path,folder_id';
+  // NOTA: si ves error 500 aquí, ejecuta en Supabase SQL Editor:
+  // ALTER TABLE songs ADD COLUMN IF NOT EXISTS cover_url TEXT, ADD COLUMN IF NOT EXISTS liked BOOLEAN DEFAULT FALSE, ADD COLUMN IF NOT EXISTS folder_path TEXT, ADD COLUMN IF NOT EXISTS folder_id TEXT;
   const {data, error} = await _supabase.from('songs')
     .select(SELECT)
     .eq('user_id', currentUser.id)
@@ -4188,20 +4190,10 @@ async function scanGDrive(token, accountKey, deleteFirst=true){
       return parentPath ? parentPath+'/'+folder.name : folder.name;
     }
 
-    // ── PASO 4: Borrar y guardar canciones con folder_path ──
+    // ── PASO 4: Guardar canciones con upsert (NO borrar — ahorra IO) ──
+    // upsert actualiza si ya existe (user_id,file_path), inserta si es nueva.
+    // Esto evita el ciclo DELETE+INSERT que quemaba el budget de Supabase.
     toast('⏳ '+allFiles.length+' canciones — guardando...');
-
-    // FIX: Siempre borrar canciones de la cuenta específica antes de insertar.
-    // Esto evita depender de un constraint único (user_id,file_path) en Supabase que
-    // podría no existir y causaría que upsert falle silenciosamente guardando 0 canciones.
-    if(accountKey){
-      const{error:delErr}=await _supabase.from('songs').delete()
-        .eq('user_id',currentUser.id).eq('cloud_provider','gdrive').eq('account_key',accountKey);
-      if(delErr) console.warn('Error borrando canciones previas:',delErr.message);
-    } else if(deleteFirst){
-      await _supabase.from('songs').delete()
-        .eq('user_id',currentUser.id).eq('cloud_provider','gdrive');
-    }
 
     let saved=0; const BATCH=100;
     for(let i=0;i<allFiles.length;i+=BATCH){
@@ -4215,7 +4207,6 @@ async function scanGDrive(token, accountKey, deleteFirst=true){
         if(partes.length>=3){ album=partes[1].trim(); }
         const parentId=file.parents?file.parents[0]:null;
         const folderPath=getFolderPath(parentId);
-        // Intentar obtener duración desde metadata de Drive (disponible para algunos formatos)
         const driveDurMs=file.videoMediaMetadata&&file.videoMediaMetadata.durationMillis
           ?parseInt(file.videoMediaMetadata.durationMillis):0;
         const driveDurSec=driveDurMs>0?Math.floor(driveDurMs/1000):0;
@@ -4230,8 +4221,9 @@ async function scanGDrive(token, accountKey, deleteFirst=true){
           folder_id:parentId||null
         };
       });
-      // FIX: usar insert en lugar de upsert para no depender del constraint único en BD
-      const{error}=await _supabase.from('songs').insert(rows);
+      // upsert: si ya existe la canción la actualiza, si es nueva la inserta — nunca falla con 409
+      const{error}=await _supabase.from('songs')
+        .upsert(rows,{onConflict:'user_id,file_path',ignoreDuplicates:false});
       if(error){
         console.error('Lote '+i+':',error.message);
         toast('⚠ Error guardando canciones: '+error.message);
@@ -4276,7 +4268,7 @@ async function syncCloud(id, accountKey){
       if(acc.expires&&new Date(acc.expires)<new Date()){
         toast('⚠ Token expirado para '+(acc.label||acc.key)+' — reconecta'); continue;
       }
-      await scanGDrive(acc.token, acc.key, true);
+      await scanGDrive(acc.token, acc.key, false); // false: no borrar, upsert maneja duplicados
     }
     await loadClouds(); await loadSongsFromDB(); updateStats(); renderAll();
     toast('✓ Sincronizado — '+songs.length+' canciones');
