@@ -2515,8 +2515,6 @@ function _clearCache(){
 async function _fetchSongsPage(from, size, attempt){
   attempt = attempt || 1;
   const SELECT = 'id,title,artist,album,duration,file_path,file_url,cloud_provider,account_key,cover_url,liked,folder_path,folder_id';
-  // NOTA: si ves error 500 aquí, ejecuta en Supabase SQL Editor:
-  // ALTER TABLE songs ADD COLUMN IF NOT EXISTS cover_url TEXT, ADD COLUMN IF NOT EXISTS liked BOOLEAN DEFAULT FALSE, ADD COLUMN IF NOT EXISTS folder_path TEXT, ADD COLUMN IF NOT EXISTS folder_id TEXT;
   const {data, error} = await _supabase.from('songs')
     .select(SELECT)
     .eq('user_id', currentUser.id)
@@ -4190,9 +4188,10 @@ async function scanGDrive(token, accountKey, deleteFirst=true){
       return parentPath ? parentPath+'/'+folder.name : folder.name;
     }
 
-    // ── PASO 4: Guardar canciones con upsert (NO borrar — ahorra IO) ──
-    // upsert actualiza si ya existe (user_id,file_path), inserta si es nueva.
-    // Esto evita el ciclo DELETE+INSERT que quemaba el budget de Supabase.
+    // ── PASO 4: Guardar con upsert — NUNCA borra canciones de otras cuentas ──
+    // El constraint único (user_id, file_path) garantiza que upsert actualiza
+    // si ya existe y solo inserta si es nueva. Cada cuenta tiene su propio file_path
+    // porque incluye el accountKey como prefijo, así nunca se mezclan.
     toast('⏳ '+allFiles.length+' canciones — guardando...');
 
     let saved=0; const BATCH=100;
@@ -4221,7 +4220,8 @@ async function scanGDrive(token, accountKey, deleteFirst=true){
           folder_id:parentId||null
         };
       });
-      // upsert: si ya existe la canción la actualiza, si es nueva la inserta — nunca falla con 409
+      // upsert con constraint único — actualiza si existe, inserta si es nueva
+      // NUNCA borra canciones de otras cuentas porque cada cuenta tiene prefijo distinto en file_path
       const{error}=await _supabase.from('songs')
         .upsert(rows,{onConflict:'user_id,file_path',ignoreDuplicates:false});
       if(error){
@@ -4253,7 +4253,6 @@ async function scanGDrive(token, accountKey, deleteFirst=true){
 
 async function syncCloud(id, accountKey){
   if(id==='gdrive'){
-    // Load all accounts from multi-account JSON
     const{data:rows}=await _supabase.from('cloud_connections')
       .select('*').eq('user_id',currentUser.id).eq('provider','gdrive').limit(1);
     const row=rows&&rows[0];
@@ -4261,14 +4260,23 @@ async function syncCloud(id, accountKey){
     let accounts=[];
     try{const p=JSON.parse(row.access_token);if(p&&p._multiAccount&&Array.isArray(p.accounts))accounts=p.accounts;}catch(e){}
     if(!accounts.length) accounts=[{key:row.account_key||'gdrive',label:row.account_label,token:row.access_token,expires:row.token_expires_at}];
-    // Filter to specific account if requested
     const toSync=accountKey?accounts.filter(a=>a.key===accountKey):accounts;
     if(!toSync.length){toast('⚠ Cuenta no encontrada');return;}
     for(const acc of toSync){
-      if(acc.expires&&new Date(acc.expires)<new Date()){
-        toast('⚠ Token expirado para '+(acc.label||acc.key)+' — reconecta'); continue;
+      // Auto-renovar token antes de sincronizar — nunca pedir reconexión manual
+      let tok = connectedClouds['_tok_'+acc.key] || acc.token;
+      if(!tok || (acc.expires && new Date(acc.expires)<new Date())){
+        toast('⏳ Renovando token para '+(acc.label||acc.key)+'...');
+        const refreshed = await autoRefreshToken(acc.key, acc.label||acc.key);
+        if(refreshed){
+          tok = connectedClouds['_tok_'+acc.key] || acc.token;
+        } else {
+          toast('⚠ No se pudo renovar token para '+(acc.label||acc.key)+' — omitiendo');
+          continue;
+        }
       }
-      await scanGDrive(acc.token, acc.key, false); // false: no borrar, upsert maneja duplicados
+      // false = NO borrar canciones — upsert maneja todo
+      await scanGDrive(tok, acc.key, false);
     }
     await loadClouds(); await loadSongsFromDB(); updateStats(); renderAll();
     toast('✓ Sincronizado — '+songs.length+' canciones');
