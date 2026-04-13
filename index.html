@@ -2313,11 +2313,9 @@ function loginSuccess(user){
   const _savedAvatar = (()=>{ try{ return localStorage.getItem('snt_avatar_'+user.id); }catch(e){ return null; } })();
   currentUser={
     id:user.id,
-    name:user.user_metadata?.display_name||user.user_metadata?.name||user.user_metadata?.full_name||user.email.split('@')[0],
-    display_name:null, // se carga desde profiles table en initApp
+    name:user.user_metadata?.name||user.user_metadata?.full_name||user.email.split('@')[0],
     email:user.email,
-    avatar:_savedAvatar||null,
-    user_metadata: user.user_metadata || {}
+    avatar:_savedAvatar||null
   };
   // Primero cambiar pantalla visualmente
   document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
@@ -2406,7 +2404,6 @@ async function initApp(){
   // Cargar nubes y playlists (rápido — pocas filas)
   await loadClouds();
   await loadPlaylists();
-  await loadProfile();
   updateStats();
   renderClouds(); renderPlaylists();
 
@@ -3895,6 +3892,8 @@ async function updateGDriveTokenOnly(accountKey,newToken,expiresIn){
     }).eq('id',row.id);
     scheduleTokenRefresh(accountKey,accountKey.replace(/^gdrive:/,''),exp);
     console.log('\u2705 Token silently refreshed for',accountKey);
+    // Limpiar entradas 'none' del coverCache para que reintenten con el token nuevo
+    Object.keys(_coverCache).forEach(k=>{ if(_coverCache[k]==='none') delete _coverCache[k]; });
     return true;
   }catch(e){console.error('updateGDriveTokenOnly:',e);return false;}
 }
@@ -4182,7 +4181,7 @@ async function scanGDrive(token, accountKey, deleteFirst=true){
     // ── PASO 1: Escanear todos los archivos de audio con su parent ──
     let allFiles=[],pageToken=null,pagina=1;
     // 'me' in owners filtra solo archivos propios — excluye archivos compartidos por otros
-    const tipos="(mimeType='audio/mpeg' or mimeType='audio/flac' or mimeType='audio/wav' or mimeType='audio/ogg' or mimeType='audio/x-m4a' or mimeType='audio/mp4') and 'me' in owners and trashed=false";
+    const tipos="(mimeType='audio/mpeg' or mimeType='audio/mp3' or mimeType='audio/flac' or mimeType='audio/wav' or mimeType='audio/x-wav' or mimeType='audio/ogg' or mimeType='audio/x-m4a' or mimeType='audio/mp4' or mimeType='audio/aac' or mimeType='audio/x-aac' or mimeType='audio/wma' or mimeType='audio/x-ms-wma' or mimeType='audio/opus') and trashed=false";
     do {
       let url='https://www.googleapis.com/drive/v3/files'
         +'?q='+encodeURIComponent(tipos)
@@ -4716,15 +4715,20 @@ function _initCoverObserver(){
             // Primera vez — intentar descargar carátula
             _loadID3Cover(fileId,accountKey);
           } else if(_coverCache[fileId]==='none'){
-            // Sin carátula confirmado — no re-descargar (evita tráfico excesivo con miles de canciones)
-            // Solo reintentar si el song ya no tiene cover marcado (puede cambiar entre sesiones)
+            // Sin carátula confirmado — reintentar si hay token activo (puede haber sido renovado)
+            const hasToken = Object.keys(connectedClouds).some(k=>k.startsWith('_tok_')&&connectedClouds[k]);
             const s=songs.find(x=>x.fileId===fileId);
             if(s&&s.coverUrl){
               // La BD tiene cover aunque el cache diga 'none' — actualizar cache y aplicar
               _coverCache[fileId]=s.coverUrl;
               _applycover(fileId,s.coverUrl);
+            } else if(hasToken){
+              // Hay token — reintentar descarga de carátula
+              delete _coverCache[fileId];
+              delete _coverPending[fileId];
+              _loadID3Cover(fileId,accountKey);
             }
-            // Si no hay cover en BD tampoco, no reintentamos esta sesión
+            // Si no hay token, no reintentamos
           } else {
             // Tenemos carátula en cache — aplicarla directamente
             _applycover(fileId,_coverCache[fileId]);
@@ -4953,26 +4957,14 @@ async function cleanDuplicates(){
 }
 
 // ══ CONFIGURACIÓN — PERFIL ══
-async function loadProfile(){
-  if(!currentUser) return;
-  const { data } = await _supabase.from('profiles').select('display_name').eq('id', currentUser.id).maybeSingle();
-  if(data && data.display_name){
-    currentUser.display_name = data.display_name;
-    currentUser.name = data.display_name;
-    const un = document.getElementById('userName');
-    if(un) un.textContent = data.display_name;
-    const gr = document.getElementById('homeGreeting');
-    if(gr) gr.textContent = 'Hola, '+data.display_name.split(' ')[0]+' 👋';
-  }
-}
-
 function renderSettingsProfile(){
   if(!currentUser) return;
+  const meta = currentUser.user_metadata || {};
   const emailEl = document.getElementById('cfgEmail');
   if(emailEl) emailEl.textContent = currentUser.email || '—';
   const nameInput = document.getElementById('cfgDisplayName');
-  if(nameInput) nameInput.value = currentUser.display_name || currentUser.name || '';
-  _renderCfgAvatar(_loadAvatar() || null, currentUser.display_name || currentUser.name || currentUser.email || '?');
+  if(nameInput) nameInput.value = meta.display_name || meta.full_name || meta.name || '';
+  _renderCfgAvatar(_loadAvatar() || null, meta.display_name || meta.full_name || currentUser.email || '?');
 }
 
 function _renderCfgAvatar(url, fallbackName){
@@ -4992,15 +4984,16 @@ async function saveDisplayName(){
   const name = (input ? input.value : '').trim();
   if(!name){ if(msg){msg.style.color='var(--red)';msg.textContent='El nombre no puede estar vacío.';} return; }
   if(msg){msg.style.color='var(--text3)';msg.textContent='Guardando...';}
-  const { error } = await _supabase.from('profiles').upsert({
-    id: currentUser.id,
-    display_name: name,
-    updated_at: new Date().toISOString()
-  });
+  const { error } = await _supabase.auth.updateUser({ data: { display_name: name, full_name: name, name: name } });
   if(error){
     if(msg){msg.style.color='var(--red)';msg.textContent='Error: '+error.message;}
   } else {
-    currentUser.display_name = name;
+    // Actualizar currentUser en memoria para que no se pierda al volver a la pantalla
+    if(currentUser && currentUser.user_metadata){
+      currentUser.user_metadata.display_name = name;
+      currentUser.user_metadata.full_name = name;
+      currentUser.user_metadata.name = name;
+    }
     currentUser.name = name;
     if(msg){msg.style.color='var(--green)';msg.textContent='✓ Nombre actualizado';}
     const un = document.getElementById('userName');
