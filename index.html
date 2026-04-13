@@ -3192,37 +3192,68 @@ function renderLiked(){
   const c=document.getElementById('likedCount'); if(c) c.textContent=liked.length+' canciones';
   el.innerHTML=liked.length?liked.map((s,i)=>songRowHTML(s,i+1)).join(''):empty('Aún no tienes favoritas — pulsa ♡ para agregar');
 }
-function renderAccounts(){
+async function renderAccounts(){
   const el=document.getElementById('accountsList'); if(!el) return;
   let accs=(connectedClouds._accounts||[]).filter(a=>a.provider==='gdrive');
-  // Dedup: si hay cuentas con email específico (key contiene ':'), eliminar la entrada genérica 'gdrive'
   const hasSpecific=accs.some(a=>a.account_key&&a.account_key.includes(':'));
   if(hasSpecific) accs=accs.filter(a=>a.account_key!=='gdrive'&&a.account_key!=='gdrive:legacy');
-  // Dedup by label (email) para evitar duplicados del mismo email
   const seen=new Set(); accs=accs.filter(a=>{ const k=a.account_label||a.account_key; if(seen.has(k)) return false; seen.add(k); return true; });
   if(!accs.length){
     el.innerHTML='<div style="padding:40px;text-align:center;color:var(--text3)">No hay cuentas de Google Drive.<br><br><button class="btn-primary" style="width:auto;padding:10px 22px" onclick="startConnect(\'gdrive\')">Conectar Google Drive</button></div>';
     return;
   }
+
+  // Renderizar cards con "..." mientras cargamos el conteo real desde Supabase
   el.innerHTML=accs.map(acc=>{
     const key=acc.account_key||acc.provider;
     const label=acc.account_label||key;
-    const cnt=songs.filter(s=>s.accountKey===key).length;
+    const safeKey=key.replace(/[^a-zA-Z0-9_-]/g,'_');
     return '<div class="account-card">'
-      +'<div class="account-icon" style="background:#4285F422">🔵</div>'
+      +'<div class="account-icon" style="background:#4285F422">\uD83D\uDD35</div>'
       +'<div class="account-info">'
       +'<div class="account-name">Google Drive</div>'
       +'<div class="account-sub" style="color:var(--accent2);font-size:0.78rem">'+label+'</div>'
-      +'<div class="account-sub">'+(acc.expired?'⚠ Token expirado':cnt+' canciones · Activo')+'</div>'
+      +'<div class="account-sub" id="acccnt_'+safeKey+'">'+(acc.expired?'\u26a0 Token expirado':'\u2026 canciones \u00b7 Activo')+'</div>'
       +'</div>'
       +'<div style="width:8px;height:8px;border-radius:50%;flex-shrink:0;background:'+(acc.expired?'var(--red)':'var(--green)')+'"></div>'
       +(acc.expired
         ?'<button class="btn-connect" style="margin-left:12px;width:auto;padding:8px 14px;font-size:0.75rem" onclick="startConnect(\'gdrive\')">Reconectar</button>'
-        +'<button class="btn-disconnect" style="margin-left:6px;width:auto;padding:8px 14px;font-size:0.75rem" onclick="disconnectCloud(\'gdrive\',\''+key+'\')">✕ Desconectar</button>'
-        :'<button class="btn-sync" style="margin-left:12px;width:auto;padding:8px 14px;font-size:0.75rem" onclick="syncCloud(\'gdrive\',\''+key+'\')">↻ Sync</button>'
-        +'<button class="btn-disconnect" style="margin-left:6px;width:auto;padding:8px 14px;font-size:0.75rem" onclick="disconnectCloud(\'gdrive\',\''+key+'\')">✕ Desconectar</button>')      +'</div>';
+        +'<button class="btn-disconnect" style="margin-left:6px;width:auto;padding:8px 14px;font-size:0.75rem" onclick="disconnectCloud(\'gdrive\',\''+key+'\')">\u2715 Desconectar</button>'
+        :'<button class="btn-sync" style="margin-left:12px;width:auto;padding:8px 14px;font-size:0.75rem" onclick="syncCloud(\'gdrive\',\''+key+'\')">\u21bb Sync</button>'
+        +'<button class="btn-disconnect" style="margin-left:6px;width:auto;padding:8px 14px;font-size:0.75rem" onclick="disconnectCloud(\'gdrive\',\''+key+'\')">\u2715 Desconectar</button>')
+      +'</div>';
   }).join('')
   +'<div style="margin-top:16px"><button class="btn-connect" style="width:auto;padding:10px 20px" onclick="startConnect(\'gdrive\')">+ Agregar otra cuenta</button></div>';
+
+  // Consultar conteo REAL desde Supabase para cada cuenta
+  for(let i=0;i<accs.length;i++){
+    const acc=accs[i];
+    if(acc.expired) continue;
+    const key=acc.account_key||acc.provider;
+    const safeKey=key.replace(/[^a-zA-Z0-9_-]/g,'_');
+    const cntEl=document.getElementById('acccnt_'+safeKey);
+    if(!cntEl) continue;
+    try{
+      const {count:c1}=await _supabase.from('songs')
+        .select('id',{count:'exact',head:true})
+        .eq('user_id',currentUser.id)
+        .eq('account_key',key);
+      // Primera cuenta: sumar canciones sin account_key (datos legacy)
+      let legacy=0;
+      if(i===0){
+        const {count:c2}=await _supabase.from('songs')
+          .select('id',{count:'exact',head:true})
+          .eq('user_id',currentUser.id)
+          .is('account_key',null);
+        legacy=c2||0;
+      }
+      const total=(c1||0)+legacy;
+      cntEl.textContent=total+' canciones \u00b7 Activo';
+    }catch(e){
+      const cnt=songs.filter(s=>s.accountKey===key).length;
+      cntEl.textContent=cnt+' canciones \u00b7 Activo';
+    }
+  }
 }
 function renderClouds(){
   const el=document.getElementById('cloudsGrid'); if(!el) return;
@@ -4178,45 +4209,23 @@ async function scanGDrive(token, accountKey, deleteFirst=true){
   try {
     // ── PASO 1: Escanear todos los archivos de audio con su parent ──
     let allFiles=[],pageToken=null,pagina=1;
-
-    // Scan 1A: archivos con MIME type de audio explícito
-    const tipos="(mimeType='audio/mpeg' or mimeType='audio/mp3' or mimeType='audio/flac' or mimeType='audio/wav' or mimeType='audio/x-wav' or mimeType='audio/ogg' or mimeType='audio/x-m4a' or mimeType='audio/mp4' or mimeType='audio/aac' or mimeType='audio/x-aac' or mimeType='audio/wma' or mimeType='audio/x-ms-wma' or mimeType='audio/opus') and trashed=false";
+    // 'me' in owners filtra solo archivos propios — excluye archivos compartidos por otros
+    const tipos="(mimeType='audio/mpeg' or mimeType='audio/flac' or mimeType='audio/wav' or mimeType='audio/ogg' or mimeType='audio/x-m4a' or mimeType='audio/mp4') and 'me' in owners and trashed=false";
     do {
       let url='https://www.googleapis.com/drive/v3/files'
         +'?q='+encodeURIComponent(tipos)
         +'&fields='+encodeURIComponent('nextPageToken,files(id,name,mimeType,parents,videoMediaMetadata)')
         +'&pageSize=1000';
       if(pageToken) url+='&pageToken='+encodeURIComponent(pageToken);
-      toast('\u23f3 Escaneando p\u00e1g '+pagina+'...');
+      toast('⏳ Escaneando pág '+pagina+'...');
       const res=await fetch(url,{headers:{Authorization:'Bearer '+token}});
       const data=await res.json();
-      if(data.error){toast('\u26a0 Error Drive: '+data.error.message);return;}
+      if(data.error){toast('⚠ Error Drive: '+data.error.message);return;}
       if(data.files&&data.files.length) allFiles=allFiles.concat(data.files);
       pageToken=data.nextPageToken||null; pagina++;
     } while(pageToken);
 
-    // Scan 1B: archivos con tipo genérico pero extensión de audio
-    // (Drive a veces no detecta el MIME type correctamente)
-    const tiposExt="mimeType='application/octet-stream' and (name contains '.mp3' or name contains '.flac' or name contains '.m4a' or name contains '.wav' or name contains '.ogg' or name contains '.aac' or name contains '.wma' or name contains '.opus' or name contains '.MP3' or name contains '.FLAC' or name contains '.M4A') and trashed=false";
-    let pageToken2=null, pagina2=1;
-    do {
-      let url2='https://www.googleapis.com/drive/v3/files'
-        +'?q='+encodeURIComponent(tiposExt)
-        +'&fields='+encodeURIComponent('nextPageToken,files(id,name,mimeType,parents,videoMediaMetadata)')
-        +'&pageSize=1000';
-      if(pageToken2) url2+='&pageToken='+encodeURIComponent(pageToken2);
-      toast('\u23f3 Buscando archivos extra p\u00e1g '+pagina2+'...');
-      const res2=await fetch(url2,{headers:{Authorization:'Bearer '+token}});
-      const data2=await res2.json();
-      if(!data2.error && data2.files && data2.files.length){
-        const existingIds=new Set(allFiles.map(f=>f.id));
-        const nuevos=data2.files.filter(f=>!existingIds.has(f.id));
-        allFiles=allFiles.concat(nuevos);
-      }
-      pageToken2=(data2.nextPageToken)||null; pagina2++;
-    } while(pageToken2);
-
-    if(!allFiles.length){toast('\u26a0 No se encontraron archivos de m\u00fasica');return;}
+    if(!allFiles.length){toast('⚠ No se encontraron archivos de música');return;}
 
     // ── PASO 2: Escanear todas las carpetas para construir el árbol ──
     toast('⏳ Escaneando carpetas...');
@@ -4714,69 +4723,12 @@ function _fetchCover(fileId, accountKey){
       });
     });
   })
-  .then(async dataUrl=>{
+  .then(dataUrl=>{
     _coverPending[fileId]=false;
-    if(dataUrl){
-      _coverCache[fileId]=dataUrl;
-      _applycover(fileId,dataUrl);
-      // Guardar en BD para no re-descargar la próxima sesión
-      const s=songs.find(x=>x.fileId===fileId);
-      if(s&&currentUser) _supabase.from('songs').update({cover_url:dataUrl}).eq('id',s.id).then(()=>{});
-    } else {
-      // Fallback: buscar carátula en iTunes por artista + álbum (gratis, sin API key)
-      const s=songs.find(x=>x.fileId===fileId);
-      if(s && s.artist && s.artist!=='Desconocido'){
-        const itunesUrl=await _fetchCoverFromItunes(s.artist,s.album,s.title);
-        if(itunesUrl){
-          _coverCache[fileId]=itunesUrl;
-          _applycover(fileId,itunesUrl);
-          if(currentUser) _supabase.from('songs').update({cover_url:itunesUrl}).eq('id',s.id).then(()=>{});
-          return;
-        }
-      }
-      _coverCache[fileId]='none';
-    }
+    if(dataUrl){_coverCache[fileId]=dataUrl;_applycover(fileId,dataUrl);}
+    else{_coverCache[fileId]='none';}
   })
-  .catch(async ()=>{
-    _coverPending[fileId]=false;
-    // Intentar iTunes incluso si falló la descarga del MP3
-    const s=songs.find(x=>x.fileId===fileId);
-    if(s && s.artist && s.artist!=='Desconocido'){
-      const itunesUrl=await _fetchCoverFromItunes(s.artist,s.album,s.title);
-      if(itunesUrl){
-        _coverCache[fileId]=itunesUrl;
-        _applycover(fileId,itunesUrl);
-        if(currentUser) _supabase.from('songs').update({cover_url:itunesUrl}).eq('id',s.id).then(()=>{});
-        return;
-      }
-    }
-    _coverCache[fileId]='none';
-  });
-}
-
-// Busca carátula en iTunes Search API — gratis, sin API key, muy rápido
-const _itunesCache={};
-async function _fetchCoverFromItunes(artist, album, title){
-  const q=(album&&album!=='Sin álbum'&&album!=='Google Drive')
-    ?(artist+' '+album)
-    :(artist+' '+title);
-  const key=q.toLowerCase().trim();
-  if(_itunesCache[key]!==undefined) return _itunesCache[key]||null;
-  try{
-    const url='https://itunes.apple.com/search?term='+encodeURIComponent(q)+'&entity=album&limit=3&media=music';
-    const r=await fetch(url,{signal:AbortSignal.timeout(5000)});
-    if(!r.ok){_itunesCache[key]=false;return null;}
-    const data=await r.json();
-    if(data.results&&data.results.length){
-      // Tomar resultado con mayor coincidencia de artista
-      const best=data.results.find(x=>(x.artistName||'').toLowerCase().includes(artist.toLowerCase()))
-        ||data.results[0];
-      const art=(best.artworkUrl100||'').replace('100x100bb','500x500bb');
-      if(art){_itunesCache[key]=art;return art;}
-    }
-    _itunesCache[key]=false;
-  }catch(e){_itunesCache[key]=false;}
-  return null;
+  .catch(()=>{_coverPending[fileId]=false;_coverCache[fileId]='none';});
 }
 
 function _initCoverObserver(){
@@ -4792,20 +4744,15 @@ function _initCoverObserver(){
             // Primera vez — intentar descargar carátula
             _loadID3Cover(fileId,accountKey);
           } else if(_coverCache[fileId]==='none'){
+            // Sin carátula confirmado — no re-descargar (evita tráfico excesivo con miles de canciones)
+            // Solo reintentar si el song ya no tiene cover marcado (puede cambiar entre sesiones)
             const s=songs.find(x=>x.fileId===fileId);
             if(s&&s.coverUrl){
+              // La BD tiene cover aunque el cache diga 'none' — actualizar cache y aplicar
               _coverCache[fileId]=s.coverUrl;
               _applycover(fileId,s.coverUrl);
-            } else if(s&&s.artist&&s.artist!=='Desconocido'){
-              // Intentar iTunes como última opción si no se descargó antes
-              _fetchCoverFromItunes(s.artist,s.album,s.title).then(url=>{
-                if(url){
-                  _coverCache[fileId]=url;
-                  _applycover(fileId,url);
-                  if(currentUser) _supabase.from('songs').update({cover_url:url}).eq('id',s.id).then(()=>{});
-                }
-              });
             }
+            // Si no hay cover en BD tampoco, no reintentamos esta sesión
           } else {
             // Tenemos carátula en cache — aplicarla directamente
             _applycover(fileId,_coverCache[fileId]);
