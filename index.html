@@ -2814,6 +2814,8 @@ async function _rescanAllClouds(){
   const accounts = (connectedClouds._accounts || []).filter(a => !a.expired && a.provider === 'gdrive');
   if(!accounts.length){ toast('⚠ No hay cuentas activas de Google Drive'); return; }
   toast('⏳ Iniciando escaneo...');
+  // FIX: limpiar caché UNA sola vez antes del loop
+  await _clearCache();
   for(const acc of accounts){
     // Intentar obtener token de memoria primero, luego de la BD
     let tok = connectedClouds['_tok_'+acc.account_key] || connectedClouds['_tok_gdrive'];
@@ -4213,7 +4215,8 @@ async function saveGDriveToken(accessToken, expiresIn, refreshToken=null){
 // and query MusicBrainz API to get cover art. This runs async after scan.
 async function scanGDrive(token, accountKey, deleteFirst=true){
   toast('⏳ Escaneando Google Drive...');
-  await _clearCache(); // Limpiar caché para forzar recarga después del scan
+  // FIX: _clearCache se movió a syncCloud para no borrar caché entre cuentas.
+  // No llamar _clearCache aquí — se llama UNA sola vez antes de sincronizar todas las cuentas.
   try {
     // ── PASO 1: Escanear todos los archivos de audio con su parent ──
     let allFiles=[],pageToken=null,pagina=1;
@@ -4374,6 +4377,8 @@ async function syncCloud(id, accountKey){
     // Filter to specific account if requested
     const toSync=accountKey?accounts.filter(a=>a.key===accountKey):accounts;
     if(!toSync.length){toast('⚠ Cuenta no encontrada');return;}
+    // FIX: limpiar caché UNA sola vez antes de sincronizar todas las cuentas
+    await _clearCache();
     for(const acc of toSync){
       let tok = connectedClouds['_tok_'+acc.key] || acc.token;
       if(!tok || (acc.expires && new Date(acc.expires)<new Date())){
@@ -4384,7 +4389,10 @@ async function syncCloud(id, accountKey){
       }
       await scanGDrive(tok, acc.key, false);
     }
-    await loadClouds(); await loadSongsFromDB(); updateStats(); renderAll();
+    // FIX: cargar TODAS las canciones de ambas cuentas desde Supabase y guardar caché unificado
+    await loadClouds();
+    await loadSongsFromDB();
+    updateStats(); renderAll();
     toast('✓ Sincronizado — '+songs.length+' canciones');
   } else { toast('Próximamente para '+id); }
 }
