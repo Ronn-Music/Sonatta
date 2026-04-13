@@ -2510,8 +2510,10 @@ async function _saveCache(arr){
     console.log('Cache IDB guardado: ' + arr.length + ' canciones');
   } catch(e){
     console.warn('Cache IDB write failed:', e.message);
-    // Fallback a localStorage para catálogos pequeños
-    try { localStorage.setItem(_cacheKey(), JSON.stringify(arr.slice(0,500))); } catch(e2){}
+    // Fallback a localStorage — intentar guardar todo, ignorar si excede 5MB
+    try { localStorage.setItem(_cacheKey(), JSON.stringify(arr)); } catch(e2){
+      console.warn('localStorage también falló (probablemente >5MB). Caché no guardado.');
+    }
   }
 }
 
@@ -2526,9 +2528,8 @@ async function _loadCache(){
     });
     db.close();
     if(Array.isArray(arr) && arr.length > 0) return arr;
-    // Intentar fallback de localStorage (migración desde v4)
-    const raw = localStorage.getItem('snt_s_' + (currentUser ? currentUser.id : '') + '_v4');
-    if(raw){ const a = JSON.parse(raw); return (Array.isArray(a) && a.length > 0) ? a : null; }
+    // FIX: NO migrar caché v4 de localStorage — puede estar truncado a 500 canciones (bug anterior).
+    // Si IDB no tiene datos, forzar recarga completa desde Supabase.
     return null;
   } catch(e){
     // Fallback a localStorage si IndexedDB no disponible
@@ -2575,9 +2576,13 @@ async function _clearCache(){
 async function _fetchSongsPage(from, size, attempt){
   attempt = attempt || 1;
   const SELECT = 'id,title,artist,album,duration,file_path,file_url,cloud_provider,account_key,cover_url,liked,folder_path,folder_id';
+  // FIX CRÍTICO: .order('id') es OBLIGATORIO con .range() en Supabase.
+  // Sin orden definido, el servidor puede devolver páginas con filas duplicadas
+  // o saltar filas entre lotes, causando que miles de canciones no se carguen.
   const {data, error} = await _supabase.from('songs')
     .select(SELECT)
     .eq('user_id', currentUser.id)
+    .order('id', { ascending: true })
     .range(from, from + size - 1);
 
   if(error){
@@ -2610,9 +2615,10 @@ async function _loadAllFromSupabase(PAGE, onProgress){
       console.error('Fetch error lote ' + from + ':', result.error.message);
       if(errors >= 3) break;
       await new Promise(r => setTimeout(r, 1000 * errors));
+      // FIX: NO avanzar 'from' cuando hay error — reintentar el mismo lote
       continue;
     }
-    errors = 0;
+    errors = 0; // FIX: resetear errores solo tras éxito
     const data = result.data || [];
     if(!data.length) break;
     all = all.concat(_mapSongs(data));
@@ -2712,7 +2718,9 @@ async function loadSongsFromDB(){
       updateStats();
     }
   }).then(allSongs => {
-    if(allSongs.length >= songs.length){
+    // FIX: usar > 0 en lugar de >= songs.length para no descartar resultados válidos
+    // cuando _loadAllFromSupabase devuelve el total real (que puede coincidir con firstPage)
+    if(allSongs.length > 0){
       songs = allSongs;
       songs.sort((a,b)=>(a.title||'').localeCompare(b.title||''));
       _saveCache(songs);
@@ -4260,7 +4268,7 @@ async function scanGDrive(token, accountKey, deleteFirst=true){
     toast('⏳ '+allFiles.length+' canciones — guardando...');
 
     // UPSERT — nunca borra canciones. Cada cuenta tiene prefijo único en file_path.
-    let saved=0; const BATCH=100;
+    let saved=0; const BATCH=250; // FIX: aumentar batch de 100→250 para reducir round-trips
     // Detectar si el upsert por onConflict funciona (requiere índice único en BD)
     // Si falla con 500, hacer fallback: delete+insert por file_path
     let upsertMode = 'upsert'; // 'upsert' | 'delete_insert'
@@ -4330,8 +4338,8 @@ async function scanGDrive(token, accountKey, deleteFirst=true){
       }
 
       if(i%(BATCH*5)===0&&i>0) toast('⏳ '+saved+'/'+allFiles.length+'...');
-      // Pequeña pausa para no saturar Supabase
-      await new Promise(r=>setTimeout(r,30));
+      // FIX: delay aumentado de 30ms→80ms para no saturar Supabase con 7000+ canciones
+      await new Promise(r=>setTimeout(r,80));
     }
     toast('✓ '+saved+' de '+allFiles.length+' canciones guardadas');
 
@@ -5067,7 +5075,18 @@ async function handleAvatarChange(input){
   input.value = '';
 }
 
-// ══ BOOT ══
+// ── BOOT ──
+// FIX v41: limpiar cachés legacy de localStorage (v4) que pueden estar truncados a 500 canciones
+(function _cleanLegacyCache(){
+  try {
+    for(let i = localStorage.length - 1; i >= 0; i--){
+      const k = localStorage.key(i);
+      if(k && (k.startsWith('snt_s_') && (k.endsWith('_v4') || k.endsWith('_v3') || k.endsWith('_v2') || k.endsWith('_v1')))){
+        localStorage.removeItem(k);
+      }
+    }
+  } catch(e){}
+})();
 document.getElementById('welcomeLogoImg').src=LOGO_B64;
 checkSession();
 
