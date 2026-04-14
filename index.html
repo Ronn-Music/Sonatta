@@ -4924,7 +4924,7 @@ async function cleanDuplicates(){
   if(!currentUser){ toast('Debes iniciar sesión'); return; }
   status.style.display = 'block';
   status.innerHTML = '⏳ Analizando canciones en la base de datos...';
-  countEl.textContent = '';
+  if(countEl) countEl.textContent = ""; 
 
   // Cargar todos los IDs de canciones con su file_path
   const { data, error } = await _supabase.from('songs')
@@ -4935,24 +4935,15 @@ async function cleanDuplicates(){
   if(error){ status.innerHTML = '❌ Error: ' + error.message; return; }
   if(!data || !data.length){ status.innerHTML = '✅ No hay canciones en la base de datos.'; return; }
 
-  // Agrupar por fileId extraído del file_path
+  // FIX: agrupar por file_path completo — es unico por cuenta+archivo
+  // Antes usaba solo fileId, lo que eliminaba canciones validas de diferentes cuentas
   const byFileId = {};
-  const noFileId = [];
 
   data.forEach(s => {
-    let fileId = null;
-    if(s.file_path){
-      const parts = s.file_path.split(':');
-      for(let i = parts.length - 1; i >= 0; i--){
-        const seg = parts[i];
-        if(seg && seg.length >= 15 && /^[a-zA-Z0-9_-]+$/.test(seg) && !seg.includes('@') && !seg.includes('.')){
-          fileId = seg; break;
-        }
-      }
-    }
-    if(!fileId){ noFileId.push(s); return; }
-    if(!byFileId[fileId]) byFileId[fileId] = [];
-    byFileId[fileId].push(s);
+    // Usar file_path completo como clave — unico por cuenta
+    const key = s.file_path || s.id;
+    if(!byFileId[key]) byFileId[key] = [];
+    byFileId[key].push(s);
   });
 
   // Encontrar grupos con duplicados
@@ -4988,7 +4979,7 @@ async function cleanDuplicates(){
 
   status.innerHTML = '🎉 <b>¡Listo!</b> Se eliminaron <b>' + deleted + '</b> duplicados.<br>'
     + 'Canciones únicas restantes: <b>' + (data.length - deleted) + '</b>';
-  countEl.textContent = '';
+  if(countEl) countEl.textContent = ""; 
   toast('✅ ' + deleted + ' duplicados eliminados');
 
   // Recargar biblioteca
