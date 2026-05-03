@@ -2249,12 +2249,11 @@ function showView(name, navEl){
   const v=document.getElementById('view-'+name); if(v) v.classList.add('active');
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   if(navEl&&navEl.classList&&navEl.classList.contains('nav-item')) navEl.classList.add('active');
-  if(name==='clouds')     renderClouds();
-  if(name==='folders')    renderFolders();
-  if(name==='liked')      renderLiked();
-  if(name==='accounts')   renderAccounts();
-  if(name==='playlists')  renderPlaylists();
-  if(name==='settings')   setTimeout(renderSettingsProfile, 50);
+  if(name==='clouds')    renderClouds();
+  if(name==='folders')   renderFolders();
+  if(name==='liked')     renderLiked();
+  if(name==='accounts')  renderAccounts();
+  if(name==='settings')  setTimeout(renderSettingsProfile, 50);
 }
 
 // ══ AUTH ══
@@ -2611,8 +2610,6 @@ async function _loadAllFromSupabase(PAGE, onProgress){
   let all = [];
   let from = 0;
   let errors = 0;
-  // Detectar el límite real que devuelve la API (puede ser menor que PAGE si Supabase tiene max_rows configurado)
-  let effectivePageSize = null;
   while(true){
     await new Promise(r => setTimeout(r, 50));
     const result = await _fetchSongsPage(from, PAGE, 1);
@@ -2627,13 +2624,10 @@ async function _loadAllFromSupabase(PAGE, onProgress){
     errors = 0; // FIX: resetear errores solo tras éxito
     const data = result.data || [];
     if(!data.length) break;
-    // Detectar el límite efectivo de la API en el primer lote exitoso
-    if(effectivePageSize === null) effectivePageSize = data.length;
     all = all.concat(_mapSongs(data));
     from += data.length;
     if(onProgress) onProgress(all.length);
-    // Solo parar si devolvió menos que el límite efectivo (significa última página real)
-    if(data.length < effectivePageSize) break;
+    if(data.length < PAGE) break;
   }
   return _dedupSongs(all);
 }
@@ -2712,8 +2706,13 @@ async function loadSongsFromDB(){
   renderHomeSongs(); renderRecentGrid(); updateStats();
   if(window._activateTouchOnButtons) setTimeout(window._activateTouchOnButtons, 100);
 
-  // Siempre cargar el resto — no asumir que firstPage.length < PAGE significa última página
-  // (Supabase puede tener max_rows configurado menor que PAGE)
+  if(firstPage.length < PAGE){
+    _saveCache(songs);
+    toast('✓ ' + songs.length + ' canciones listas');
+    return;
+  }
+
+  // Hay más páginas — cargar el resto en background
   toast('⏳ ' + songs.length + ' canciones — cargando más...');
   _loadAllFromSupabase(PAGE, (n) => {
     if(countEl) countEl.textContent = n + ' ↓';
@@ -3310,23 +3309,15 @@ function renderClouds(){
   });
   el.innerHTML=html;
 }
-async function renderPlaylists(){
+function renderPlaylists(){
   const el=document.getElementById('playlistsGrid'); if(!el) return;
   const colors=['#1a1a35','#2a1a35','#1a3525','#35251a'];
-  // Obtener conteo real de canciones por playlist
-  let counts={};
-  if(playlists.length){
-    const{data:countRows}=await _supabase.from('playlist_songs')
-      .select('playlist_id').in('playlist_id',playlists.map(p=>p.id));
-    if(countRows) countRows.forEach(r=>{ counts[r.playlist_id]=(counts[r.playlist_id]||0)+1; });
-  }
-  let html=playlists.map(p=>{
-    const n=counts[p.id]||0;
-    return '<div class="playlist-card" onclick="viewPlaylist(\''+p.id+'\''+')">'
-      +'<div class="playlist-art">'+colors.map(c=>'<div class="playlist-art-q" style="background:'+c+'">🎵</div>').join('')+'</div>'
-      +'<div class="playlist-info"><div class="playlist-name">'+p.name+'</div><div class="playlist-count">'+n+' canción'+(n!==1?'es':'')+'</div></div>'
-      +'</div>';
-  }).join('');
+  let html=playlists.map(p=>
+    '<div class="playlist-card" onclick="viewPlaylist(\''+p.id+'\')">'
+    +'<div class="playlist-art">'+colors.map(c=>'<div class="playlist-art-q" style="background:'+c+'">🎵</div>').join('')+'</div>'
+    +'<div class="playlist-info"><div class="playlist-name">'+p.name+'</div><div class="playlist-count">0 canciones</div></div>'
+    +'</div>'
+  ).join('');
   html+='<div class="new-playlist-btn" onclick="createPlaylist()">'
     +'<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>'
     +'Nueva playlist</div>';
@@ -3600,13 +3591,17 @@ async function playSongById(id){
     if(m) fileId = m[1];
   }
 
-  if(!fileId){
+  if(!fileId && (!song.cloud || song.cloud === 'gdrive')){
     toast('⚠ No se puede identificar el archivo. Sincroniza de nuevo.');
     isPlaying=false; updatePlayBtn(); return;
   }
 
-  // Construir URL limpia siempre — ignora lo que estaba guardado
-  fileUrl = 'https://www.googleapis.com/drive/v3/files/' + fileId + '?alt=media';
+  // Construir URL limpia siempre para Google Drive — usar url directa para otras nubes
+  if (!song.cloud || song.cloud === 'gdrive') {
+    fileUrl = 'https://www.googleapis.com/drive/v3/files/' + fileId + '?alt=media';
+  } else {
+    fileUrl = song.fileUrl || '';
+  }
 
   toast('⏳ Cargando '+song.title+'...');
   if(song.fileId) _loadID3Cover(song.fileId, song.accountKey);
@@ -3763,55 +3758,11 @@ async function addToPlaylist(songId, playlistId){
     playlistId=playlists[idx].id;
   }
   const pl=playlists.find(p=>String(p.id)===String(playlistId));
-  // Verificar si ya está en la playlist
-  const{data:existing}=await _supabase.from('playlist_songs')
-    .select('id').eq('playlist_id',playlistId).eq('song_id',songId).maybeSingle();
-  if(existing){ toast('Ya está en "'+(pl?pl.name:'playlist')+'"'); return; }
-  // Guardar en Supabase
-  const{error}=await _supabase.from('playlist_songs')
-    .insert({playlist_id:playlistId, song_id:songId, user_id:currentUser.id});
-  if(error){ toast('Error al agregar: '+error.message); return; }
   toast('✓ Agregado a "'+(pl?pl.name:'playlist')+'"');
 }
 function showAddToPlaylistModal(){
   if(currentSongIdx===-1) return;
   addToPlaylist(songs[currentSongIdx].id, null);
-}
-async function viewPlaylist(id){
-  const pl=playlists.find(p=>String(p.id)===String(id));
-  if(!pl) return;
-  const el=document.getElementById('playlistsGrid');
-  el.innerHTML='<div style="color:var(--text2);font-size:0.85rem;padding:8px 0">Cargando canciones...</div>';
-  const{data:rows,error}=await _supabase.from('playlist_songs')
-    .select('song_id').eq('playlist_id',id);
-  if(error){ el.innerHTML='<div style="color:red">Error: '+error.message+'</div>'; return; }
-  const ids=(rows||[]).map(r=>r.song_id);
-  const plSongs=songs.filter(s=>ids.includes(s.id));
-  const colors=['#1a1a35','#2a1a35','#1a3525','#35251a'];
-  let html='<div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;grid-column:1/-1">'
-    +'<button onclick="renderPlaylists()" style="background:none;border:none;color:var(--text2);cursor:pointer;font-size:1.1rem;padding:4px 8px;border-radius:8px;display:flex;align-items:center;gap:6px">← Volver</button>'
-    +'<span style="font-size:1.1rem;font-weight:600;color:var(--text1)">'+pl.name+'</span>'
-    +'<span style="font-size:0.82rem;color:var(--text2)">'+plSongs.length+' canción'+(plSongs.length!==1?'es':'')+'</span>'
-    +'</div>';
-  if(!plSongs.length){
-    html+='<div style="grid-column:1/-1;color:var(--text2);font-size:0.9rem;padding:20px 0">Esta playlist está vacía. Agrega canciones desde el menú ⋮ de cualquier canción.</div>';
-  } else {
-    html+='<div class="songs-list" style="grid-column:1/-1">'
-      +'<div class="songs-list-header"><span>#</span><span>Título</span><span>Artista</span><span>Álbum</span><span>Duración</span><span></span></div>'
-      +plSongs.map((s,i)=>{
-        const cover=s.cover_url?'<img src="'+s.cover_url+'" style="width:34px;height:34px;border-radius:6px;object-fit:cover">'
-          :'<div style="width:34px;height:34px;border-radius:6px;background:'+colors[i%colors.length]+';display:flex;align-items:center;justify-content:center;font-size:0.9rem">🎵</div>';
-        return '<div class="song-row" data-songid="'+s.id+'" style="cursor:pointer">'
-          +'<span class="song-num">'+(i+1)+'</span>'
-          +'<span style="display:flex;align-items:center;gap:10px">'+cover+'<span>'+s.title+'</span></span>'
-          +'<span class="song-artist">'+s.artist+'</span>'
-          +'<span class="song-album" style="color:var(--text2);font-size:0.82rem">'+(s.album||'—')+'</span>'
-          +'<span class="song-dur">'+fmt(s.duration||0)+'</span>'
-          +'<span></span></div>';
-      }).join('')
-      +'</div>';
-  }
-  el.innerHTML=html;
 }
 
 function startProg(){
@@ -3848,7 +3799,7 @@ function toggleMute(){
 let _tokenRefreshTimers={};
 let _silentRefreshInProgress={};
 
-// Silent refresh via /api/refresh-token (server-side, usa refresh_token permanente)
+// Silent refresh via iframe (prompt=none)
 async function silentRefreshGDrive(accountKey){
   if(_silentRefreshInProgress[accountKey]) return null;
   _silentRefreshInProgress[accountKey]=true;
@@ -3856,45 +3807,16 @@ async function silentRefreshGDrive(accountKey){
     const{data:cd}=await _supabase.from('cloud_connections')
       .select('access_token').eq('user_id',currentUser.id).eq('provider','gdrive').limit(1);
     const row=cd&&cd[0]; if(!row){delete _silentRefreshInProgress[accountKey];return null;}
-    let refreshToken=null;
     let resolvedAccountKey=accountKey;
     try{
       const p=JSON.parse(row.access_token);
       if(p&&p._multiAccount&&Array.isArray(p.accounts)){
-        // Buscar por clave exacta primero, luego por clave genérica tomar el primero con refresh_token
-        let acc=p.accounts.find(a=>a.key===accountKey);
-        if(!acc||!acc.refresh_token){
-          // Clave genérica o sin refresh_token — buscar cualquier cuenta que tenga refresh_token
-          acc=p.accounts.find(a=>a.refresh_token);
-        }
-        if(acc){ refreshToken=acc.refresh_token; resolvedAccountKey=acc.key||accountKey; }
-      } else if(p.refresh_token){
-        refreshToken=p.refresh_token;
+        let acc=p.accounts.find(a=>a.key===accountKey) || p.accounts[0];
+        if(acc){ resolvedAccountKey=acc.key||accountKey; }
       }
-    }catch(e){ refreshToken=null; }
+    }catch(e){}
 
-    // ESTRATEGIA 1: refresh_token en servidor (permanente, no requiere interaccion)
-    if(refreshToken){
-      console.log('\u{1f511} refresh_token encontrado para',resolvedAccountKey,'(',refreshToken.substring(0,8),'...) — llamando /api/refresh-token');
-      const{data:{session}}=await _supabase.auth.getSession();
-      const supaToken=session?.access_token||'';
-      const res=await fetch('/api/refresh-token',{
-        method:'POST',
-        headers:{'Content-Type':'application/json','Authorization':'Bearer '+supaToken},
-        body:JSON.stringify({refresh_token:refreshToken})
-      });
-      const data=await res.json();
-      if(data.access_token){
-        delete _silentRefreshInProgress[accountKey];
-        console.log('\u2705 Token renovado via refresh_token para',resolvedAccountKey);
-        return {token:data.access_token, expiresIn:data.expires_in||3600, resolvedKey:resolvedAccountKey};
-      }
-      console.warn('Refresh via refresh_token fallo para',resolvedAccountKey,'status:',res.status,'error:',data.error,'desc:',data.error_description||data.message||'');
-    } else {
-      console.log('\u2139\ufe0f Sin refresh_token en BD para',accountKey,'— intentando iframe silencioso prompt=none');
-    }
-
-    // ESTRATEGIA 2: iframe silencioso con prompt=none
+    console.log('\u2139\ufe0f Intentando iframe silencioso prompt=none para',resolvedAccountKey);
     const iframeResult = await _silentIframeRefresh(resolvedAccountKey);
     delete _silentRefreshInProgress[accountKey];
     return iframeResult;
@@ -4080,8 +4002,7 @@ function connectGDrivePopup(){
   const url='https://accounts.google.com/o/oauth2/v2/auth'
     +'?client_id='+encodeURIComponent(GOOGLE_CLIENT_ID)
     +'&redirect_uri='+encodeURIComponent(GOOGLE_REDIRECT)
-    +'&response_type=code'
-    +'&access_type=offline'
+    +'&response_type=token'
     +'&scope='+encodeURIComponent(scope)
     +'&state='+encodeURIComponent(JSON.stringify({nonce,provider:'gdrive'}))
     +'&prompt='+encodeURIComponent('select_account consent');
@@ -4091,99 +4012,35 @@ function connectGDrivePopup(){
 async function _oauthMsg(ev){
   console.log('📨 _oauthMsg recibido — origin:',ev.origin,'type:',ev.data?.type);
   if(ev.origin!==window.location.origin) return;
-  const msg=ev.data; if(!msg||(msg.type!=='gdrive_token'&&msg.type!=='gdrive_code')) return;
+  const msg=ev.data; if(!msg||msg.type!=='gdrive_token') return;
   clearTimeout(_oauthInterval); window.removeEventListener('message',_oauthMsg);
   try{ if(_oauthPopup) _oauthPopup.close(); }catch(e){}
   const saved=localStorage.getItem('gdrive_oauth_nonce');
   localStorage.removeItem('gdrive_oauth_nonce');
   if(msg.nonce!==saved){toast('Error de seguridad');return;}
-  if(msg.type==='gdrive_code'){
-    // Intercambiar el code por access_token + refresh_token via Edge Function
-    toast('Conectando...');
-    const{data:{session}}=await _supabase.auth.getSession();
-    const supaToken=session?.access_token||'';
-    try{
-      console.log('Llamando /api/exchange-code con code...');
-      const res=await fetch('/api/exchange-code',{
-        method:'POST',
-        headers:{'Content-Type':'application/json','Authorization':'Bearer '+supaToken},
-        body:JSON.stringify({code:msg.code,redirect_uri:GOOGLE_REDIRECT})
-      });
-      const data=await res.json();
-      if(!data.access_token){toast('Error al conectar: '+(data.error||'desconocido'));return;}
-      await saveGDriveToken(data.access_token, data.expires_in||3600, data.refresh_token);
-    }catch(e){toast('Error de conexion: '+e.message);}
-  } else {
-    // Fallback: token directo (no deberia pasar con el nuevo flujo)
-    await saveGDriveToken(msg.token,msg.expiresIn,null);
-  }
+  await saveGDriveToken(msg.token,msg.expiresIn,null);
 }
 async function detectCloudCallback(){
-  // response_type=code => Google redirige con ?code=... en query string
-  const search=window.location.search;
   const hash=window.location.hash;
-  const hasCode=search.includes('code=');
   const hasToken=hash.includes('access_token=');
-  console.log('🔍 detectCloudCallback — hasCode:',hasCode,'hasToken:',hasToken,'opener:',!!window.opener,'search:',search.substring(0,80));
-  if(!hasCode&&!hasToken) return false;
+  console.log('🔍 detectCloudCallback — hasToken:',hasToken,'opener:',!!window.opener);
+  if(!hasToken) return false;
 
-  if(hasCode){
-    const p=new URLSearchParams(search.replace('?',''));
-    const code=p.get('code'), stRaw=p.get('state');
-    console.log('🔍 code presente:',!!code,'state raw:',stRaw?.substring(0,60));
-    if(!code) return false;
-    // IMPORTANTE: verificar que el state es de Google Drive y no de Supabase auth
-    let state={}; try{state=JSON.parse(decodeURIComponent(stRaw||'{}'));}catch{}
-    console.log('🔍 state.provider:',state.provider,'state.nonce:',state.nonce);
-    if(state.provider!=='gdrive') return false; // Si no es gdrive, dejar que Supabase lo maneje
-    window.history.replaceState({},document.title,window.location.pathname);
-    if(window.opener&&!window.opener.closed){
-      console.log('🔍 Enviando postMessage al opener...');
-      window.opener.postMessage({type:'gdrive_code',code,nonce:state.nonce},window.location.origin);
-      window.close(); return true;
-    }
-    // Sin popup (redirect directo) -- intercambiar aqui mismo
-    console.log('🔍 Sin opener — intercambiando directo. nonce en localStorage:',localStorage.getItem('gdrive_oauth_nonce'),'nonce en state:',state.nonce);
-    const nonce=localStorage.getItem('gdrive_oauth_nonce');
-    if(state.nonce&&state.nonce!==nonce){
-      console.error('🔍 NONCE MISMATCH — state:',state.nonce,'local:',nonce);
-      toast('Sesion expirada.');return false;
-    }
-    localStorage.removeItem('gdrive_oauth_nonce');
-    const{data:{session}}=await _supabase.auth.getSession();
-    const supaToken=session?.access_token||'';
-    try{
-      const res=await fetch('/api/exchange-code',{
-        method:'POST',
-        headers:{'Content-Type':'application/json','Authorization':'Bearer '+supaToken},
-        body:JSON.stringify({code,redirect_uri:GOOGLE_REDIRECT})
-      });
-      const data=await res.json();
-      console.log('exchange-code response — access_token:', !!data.access_token, '| refresh_token:', !!data.refresh_token, '| error:', data.error||'none');
-      if(!data.access_token){toast('Error al conectar: '+(data.error||'?'));return false;}
-      if(!data.refresh_token) console.warn('ATENCION: Google no devolvio refresh_token — el token expirara en', data.expires_in||3600, 'seg y no se podra renovar automaticamente');
-      await saveGDriveToken(data.access_token,data.expires_in||3600,data.refresh_token);
-    }catch(e){toast('Error: '+e.message); return false;}
-    return true;
-  }
+  const p=new URLSearchParams(hash.replace('#',''));
+  const token=p.get('access_token'), exp=parseInt(p.get('expires_in')||'3600'), stRaw=p.get('state');
+  if(!token) return false;
+  let state={}; try{state=JSON.parse(decodeURIComponent(stRaw||'{}'));}catch{}
+  if(state.provider!=='gdrive') return false;
 
-  // Fallback token implicito (legacy)
-  if(hasToken){
-    const p=new URLSearchParams(hash.replace('#',''));
-    const token=p.get('access_token'), exp=parseInt(p.get('expires_in')||'3600'), stRaw=p.get('state');
-    if(!token) return false;
-    let state={}; try{state=JSON.parse(decodeURIComponent(stRaw||'{}'));}catch{}
-    if(state.provider!=='gdrive') return false;
-    if(window.opener&&!window.opener.closed){
-      window.opener.postMessage({type:'gdrive_token',token,expiresIn:exp,nonce:state.nonce},window.location.origin);
-      window.close(); return true;
-    }
-    const nonce=localStorage.getItem('gdrive_oauth_nonce');
-    if(state.nonce&&state.nonce!==nonce){toast('Sesion expirada.');return false;}
-    localStorage.removeItem('gdrive_oauth_nonce');
-    await saveGDriveToken(token,exp,null); return true;
+  window.history.replaceState({},document.title,window.location.pathname);
+  if(window.opener&&!window.opener.closed){
+    window.opener.postMessage({type:'gdrive_token',token,expiresIn:exp,nonce:state.nonce},window.location.origin);
+    window.close(); return true;
   }
-  return false;
+  const nonce=localStorage.getItem('gdrive_oauth_nonce');
+  if(state.nonce&&state.nonce!==nonce){toast('Sesion expirada.');return false;}
+  localStorage.removeItem('gdrive_oauth_nonce');
+  await saveGDriveToken(token,exp,null); return true;
 }
 
 // FIX 2: Support multiple GDrive accounts
@@ -4502,7 +4359,7 @@ async function createPlaylist(){
   if(error){toast('Error al crear playlist');return;}
   playlists.push(data); renderPlaylists(); toast('✓ Playlist "'+name+'" creada');
 }
-// viewPlaylist is defined above near addToPlaylist
+function viewPlaylist(id){ toast('Playlists próximamente disponibles'); }
 
 // ══ MOBILE NAV ══
 function toggleMobileSidebar(){
