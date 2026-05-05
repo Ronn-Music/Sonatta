@@ -2488,11 +2488,10 @@ const IDB_STORE = 'songs';
 
 function _idbOpen(){
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(IDB_NAME, 2);
+    const req = indexedDB.open(IDB_NAME, 1);
     req.onupgradeneeded = e => {
       const db = e.target.result;
       if(!db.objectStoreNames.contains(IDB_STORE)) db.createObjectStore(IDB_STORE);
-      if(!db.objectStoreNames.contains('covers')) db.createObjectStore('covers');
     };
     req.onsuccess = e => resolve(e.target.result);
     req.onerror = () => reject(req.error);
@@ -2577,35 +2576,9 @@ async function _clearCache(){
 }
 
 // ── Consulta una página de canciones con retry si hay timeout ──
-async function _saveCoverLocal(fileId, dataUrl){
-  if(!fileId || !dataUrl || dataUrl==='none') return;
-  try {
-    const db = await _idbOpen();
-    await new Promise((resolve, reject) => {
-      const tx = db.transaction('covers', 'readwrite');
-      tx.objectStore('covers').put(dataUrl, fileId);
-      tx.oncomplete = resolve;
-      tx.onerror = () => reject(tx.error);
-    });
-    db.close();
-  } catch(e){}
-}
-async function _loadCoverLocal(fileId){
-  try {
-    const db = await _idbOpen();
-    const dataUrl = await new Promise((resolve, reject) => {
-      const tx = db.transaction('covers', 'readonly');
-      const req = tx.objectStore('covers').get(fileId);
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
-    });
-    db.close();
-    return dataUrl || null;
-  } catch(e){ return null; }
-}
 async function _fetchSongsPage(from, size, attempt){
   attempt = attempt || 1;
-  const SELECT = 'id,title,artist,album,duration,file_path,file_url,cloud_provider,account_key,liked,folder_path,folder_id';
+  const SELECT = 'id,title,artist,album,duration,file_path,cloud_provider,account_key,cover_url,liked,folder_path,folder_id';
   // FIX CRÍTICO: .order('id') es OBLIGATORIO con .range() en Supabase.
   // Sin orden definido, el servidor puede devolver páginas con filas duplicadas
   // o saltar filas entre lotes, causando que miles de canciones no se carguen.
@@ -3529,7 +3502,7 @@ async function playSongById(id){
   });
   renderHomeSongs();
 
-  if(!song.fileUrl){
+  if(!song.fileUrl && !song.filePath && !song.fileId){
     audioEl.src=''; isPlaying=false; updatePlayBtn();
     progress=0; songDuration=0; updateProgressUI(); syncNpProgress();
     toast('⚠ Sin URL de audio — reconecta Google Drive'); return;
@@ -3618,17 +3591,13 @@ async function playSongById(id){
     if(m) fileId = m[1];
   }
 
-  if(!fileId && (!song.cloud || song.cloud === 'gdrive')){
+  if(!fileId){
     toast('⚠ No se puede identificar el archivo. Sincroniza de nuevo.');
     isPlaying=false; updatePlayBtn(); return;
   }
 
-  // Construir URL limpia siempre para Google Drive — usar url directa para otras nubes
-  if (!song.cloud || song.cloud === 'gdrive') {
-    fileUrl = 'https://www.googleapis.com/drive/v3/files/' + fileId + '?alt=media';
-  } else {
-    fileUrl = song.fileUrl || '';
-  }
+  // Construir URL limpia siempre — ignora lo que estaba guardado
+  fileUrl = 'https://www.googleapis.com/drive/v3/files/' + fileId + '?alt=media';
 
   toast('⏳ Cargando '+song.title+'...');
   if(song.fileId) _loadID3Cover(song.fileId, song.accountKey);
@@ -3826,7 +3795,7 @@ function toggleMute(){
 let _tokenRefreshTimers={};
 let _silentRefreshInProgress={};
 
-// Silent refresh via iframe (prompt=none)
+// Silent refresh via /api/refresh-token (server-side, usa refresh_token permanente)
 async function silentRefreshGDrive(accountKey){
   if(_silentRefreshInProgress[accountKey]) return null;
   _silentRefreshInProgress[accountKey]=true;
@@ -3834,16 +3803,45 @@ async function silentRefreshGDrive(accountKey){
     const{data:cd}=await _supabase.from('cloud_connections')
       .select('access_token').eq('user_id',currentUser.id).eq('provider','gdrive').limit(1);
     const row=cd&&cd[0]; if(!row){delete _silentRefreshInProgress[accountKey];return null;}
+    let refreshToken=null;
     let resolvedAccountKey=accountKey;
     try{
       const p=JSON.parse(row.access_token);
       if(p&&p._multiAccount&&Array.isArray(p.accounts)){
-        let acc=p.accounts.find(a=>a.key===accountKey) || p.accounts[0];
-        if(acc){ resolvedAccountKey=acc.key||accountKey; }
+        // Buscar por clave exacta primero, luego por clave genérica tomar el primero con refresh_token
+        let acc=p.accounts.find(a=>a.key===accountKey);
+        if(!acc||!acc.refresh_token){
+          // Clave genérica o sin refresh_token — buscar cualquier cuenta que tenga refresh_token
+          acc=p.accounts.find(a=>a.refresh_token);
+        }
+        if(acc){ refreshToken=acc.refresh_token; resolvedAccountKey=acc.key||accountKey; }
+      } else if(p.refresh_token){
+        refreshToken=p.refresh_token;
       }
-    }catch(e){}
+    }catch(e){ refreshToken=null; }
 
-    console.log('\u2139\ufe0f Intentando iframe silencioso prompt=none para',resolvedAccountKey);
+    // ESTRATEGIA 1: refresh_token en servidor (permanente, no requiere interaccion)
+    if(refreshToken){
+      console.log('\u{1f511} refresh_token encontrado para',resolvedAccountKey,'(',refreshToken.substring(0,8),'...) — llamando /api/refresh-token');
+      const{data:{session}}=await _supabase.auth.getSession();
+      const supaToken=session?.access_token||'';
+      const res=await fetch('/api/refresh-token',{
+        method:'POST',
+        headers:{'Content-Type':'application/json','Authorization':'Bearer '+supaToken},
+        body:JSON.stringify({refresh_token:refreshToken})
+      });
+      const data=await res.json();
+      if(data.access_token){
+        delete _silentRefreshInProgress[accountKey];
+        console.log('\u2705 Token renovado via refresh_token para',resolvedAccountKey);
+        return {token:data.access_token, expiresIn:data.expires_in||3600, resolvedKey:resolvedAccountKey};
+      }
+      console.warn('Refresh via refresh_token fallo para',resolvedAccountKey,'status:',res.status,'error:',data.error,'desc:',data.error_description||data.message||'');
+    } else {
+      console.log('\u2139\ufe0f Sin refresh_token en BD para',accountKey,'— intentando iframe silencioso prompt=none');
+    }
+
+    // ESTRATEGIA 2: iframe silencioso con prompt=none
     const iframeResult = await _silentIframeRefresh(resolvedAccountKey);
     delete _silentRefreshInProgress[accountKey];
     return iframeResult;
@@ -4029,7 +4027,8 @@ function connectGDrivePopup(){
   const url='https://accounts.google.com/o/oauth2/v2/auth'
     +'?client_id='+encodeURIComponent(GOOGLE_CLIENT_ID)
     +'&redirect_uri='+encodeURIComponent(GOOGLE_REDIRECT)
-    +'&response_type=token'
+    +'&response_type=code'
+    +'&access_type=offline'
     +'&scope='+encodeURIComponent(scope)
     +'&state='+encodeURIComponent(JSON.stringify({nonce,provider:'gdrive'}))
     +'&prompt='+encodeURIComponent('select_account consent');
@@ -4039,35 +4038,99 @@ function connectGDrivePopup(){
 async function _oauthMsg(ev){
   console.log('📨 _oauthMsg recibido — origin:',ev.origin,'type:',ev.data?.type);
   if(ev.origin!==window.location.origin) return;
-  const msg=ev.data; if(!msg||msg.type!=='gdrive_token') return;
+  const msg=ev.data; if(!msg||(msg.type!=='gdrive_token'&&msg.type!=='gdrive_code')) return;
   clearTimeout(_oauthInterval); window.removeEventListener('message',_oauthMsg);
   try{ if(_oauthPopup) _oauthPopup.close(); }catch(e){}
   const saved=localStorage.getItem('gdrive_oauth_nonce');
   localStorage.removeItem('gdrive_oauth_nonce');
   if(msg.nonce!==saved){toast('Error de seguridad');return;}
-  await saveGDriveToken(msg.token,msg.expiresIn,null);
+  if(msg.type==='gdrive_code'){
+    // Intercambiar el code por access_token + refresh_token via Edge Function
+    toast('Conectando...');
+    const{data:{session}}=await _supabase.auth.getSession();
+    const supaToken=session?.access_token||'';
+    try{
+      console.log('Llamando /api/exchange-code con code...');
+      const res=await fetch('/api/exchange-code',{
+        method:'POST',
+        headers:{'Content-Type':'application/json','Authorization':'Bearer '+supaToken},
+        body:JSON.stringify({code:msg.code,redirect_uri:GOOGLE_REDIRECT})
+      });
+      const data=await res.json();
+      if(!data.access_token){toast('Error al conectar: '+(data.error||'desconocido'));return;}
+      await saveGDriveToken(data.access_token, data.expires_in||3600, data.refresh_token);
+    }catch(e){toast('Error de conexion: '+e.message);}
+  } else {
+    // Fallback: token directo (no deberia pasar con el nuevo flujo)
+    await saveGDriveToken(msg.token,msg.expiresIn,null);
+  }
 }
 async function detectCloudCallback(){
+  // response_type=code => Google redirige con ?code=... en query string
+  const search=window.location.search;
   const hash=window.location.hash;
+  const hasCode=search.includes('code=');
   const hasToken=hash.includes('access_token=');
-  console.log('🔍 detectCloudCallback — hasToken:',hasToken,'opener:',!!window.opener);
-  if(!hasToken) return false;
+  console.log('🔍 detectCloudCallback — hasCode:',hasCode,'hasToken:',hasToken,'opener:',!!window.opener,'search:',search.substring(0,80));
+  if(!hasCode&&!hasToken) return false;
 
-  const p=new URLSearchParams(hash.replace('#',''));
-  const token=p.get('access_token'), exp=parseInt(p.get('expires_in')||'3600'), stRaw=p.get('state');
-  if(!token) return false;
-  let state={}; try{state=JSON.parse(decodeURIComponent(stRaw||'{}'));}catch{}
-  if(state.provider!=='gdrive') return false;
-
-  window.history.replaceState({},document.title,window.location.pathname);
-  if(window.opener&&!window.opener.closed){
-    window.opener.postMessage({type:'gdrive_token',token,expiresIn:exp,nonce:state.nonce},window.location.origin);
-    window.close(); return true;
+  if(hasCode){
+    const p=new URLSearchParams(search.replace('?',''));
+    const code=p.get('code'), stRaw=p.get('state');
+    console.log('🔍 code presente:',!!code,'state raw:',stRaw?.substring(0,60));
+    if(!code) return false;
+    // IMPORTANTE: verificar que el state es de Google Drive y no de Supabase auth
+    let state={}; try{state=JSON.parse(decodeURIComponent(stRaw||'{}'));}catch{}
+    console.log('🔍 state.provider:',state.provider,'state.nonce:',state.nonce);
+    if(state.provider!=='gdrive') return false; // Si no es gdrive, dejar que Supabase lo maneje
+    window.history.replaceState({},document.title,window.location.pathname);
+    if(window.opener&&!window.opener.closed){
+      console.log('🔍 Enviando postMessage al opener...');
+      window.opener.postMessage({type:'gdrive_code',code,nonce:state.nonce},window.location.origin);
+      window.close(); return true;
+    }
+    // Sin popup (redirect directo) -- intercambiar aqui mismo
+    console.log('🔍 Sin opener — intercambiando directo. nonce en localStorage:',localStorage.getItem('gdrive_oauth_nonce'),'nonce en state:',state.nonce);
+    const nonce=localStorage.getItem('gdrive_oauth_nonce');
+    if(state.nonce&&state.nonce!==nonce){
+      console.error('🔍 NONCE MISMATCH — state:',state.nonce,'local:',nonce);
+      toast('Sesion expirada.');return false;
+    }
+    localStorage.removeItem('gdrive_oauth_nonce');
+    const{data:{session}}=await _supabase.auth.getSession();
+    const supaToken=session?.access_token||'';
+    try{
+      const res=await fetch('/api/exchange-code',{
+        method:'POST',
+        headers:{'Content-Type':'application/json','Authorization':'Bearer '+supaToken},
+        body:JSON.stringify({code,redirect_uri:GOOGLE_REDIRECT})
+      });
+      const data=await res.json();
+      console.log('exchange-code response — access_token:', !!data.access_token, '| refresh_token:', !!data.refresh_token, '| error:', data.error||'none');
+      if(!data.access_token){toast('Error al conectar: '+(data.error||'?'));return false;}
+      if(!data.refresh_token) console.warn('ATENCION: Google no devolvio refresh_token — el token expirara en', data.expires_in||3600, 'seg y no se podra renovar automaticamente');
+      await saveGDriveToken(data.access_token,data.expires_in||3600,data.refresh_token);
+    }catch(e){toast('Error: '+e.message); return false;}
+    return true;
   }
-  const nonce=localStorage.getItem('gdrive_oauth_nonce');
-  if(state.nonce&&state.nonce!==nonce){toast('Sesion expirada.');return false;}
-  localStorage.removeItem('gdrive_oauth_nonce');
-  await saveGDriveToken(token,exp,null); return true;
+
+  // Fallback token implicito (legacy)
+  if(hasToken){
+    const p=new URLSearchParams(hash.replace('#',''));
+    const token=p.get('access_token'), exp=parseInt(p.get('expires_in')||'3600'), stRaw=p.get('state');
+    if(!token) return false;
+    let state={}; try{state=JSON.parse(decodeURIComponent(stRaw||'{}'));}catch{}
+    if(state.provider!=='gdrive') return false;
+    if(window.opener&&!window.opener.closed){
+      window.opener.postMessage({type:'gdrive_token',token,expiresIn:exp,nonce:state.nonce},window.location.origin);
+      window.close(); return true;
+    }
+    const nonce=localStorage.getItem('gdrive_oauth_nonce');
+    if(state.nonce&&state.nonce!==nonce){toast('Sesion expirada.');return false;}
+    localStorage.removeItem('gdrive_oauth_nonce');
+    await saveGDriveToken(token,exp,null); return true;
+  }
+  return false;
 }
 
 // FIX 2: Support multiple GDrive accounts
@@ -4585,7 +4648,11 @@ function _applycover(fileId, dataUrl){
       document.getElementById('npModalInitial').style.display='none';
     }
   }
-  // Carátula guardada independientemente en IndexedDB, no inflar el array songs en RAM
+  const s=songs.find(x=>x.fileId===fileId);
+  if(s&&!s.coverUrl&&currentUser){
+    s.coverUrl=dataUrl;
+    _supabase.from('songs').update({cover_url:dataUrl}).eq('id',s.id).then(()=>{});
+  }
 }
 
 function _coverQueueTick(){
@@ -4677,11 +4744,7 @@ function _fetchCover(fileId, accountKey){
   })
   .then(dataUrl=>{
     _coverPending[fileId]=false;
-    if(dataUrl){
-      _coverCache[fileId]=dataUrl;
-      _applycover(fileId,dataUrl);
-      _saveCoverLocal(fileId, dataUrl);
-    }
+    if(dataUrl){_coverCache[fileId]=dataUrl;_applycover(fileId,dataUrl);}
     else{_coverCache[fileId]='none';}
   })
   .catch(()=>{_coverPending[fileId]=false;_coverCache[fileId]='none';});
@@ -4697,20 +4760,19 @@ function _initCoverObserver(){
         const accountKey=el.dataset.ak||null;
         if(fileId){
           if(!_coverCache[fileId]){
-            // Primera vez — buscar en disco local primero
-            _coverCache[fileId] = 'pending'; // Evitar múltiples peticiones
-            _loadCoverLocal(fileId).then(dataUrl => {
-              if(dataUrl) {
-                _coverCache[fileId] = dataUrl;
-                _applycover(fileId, dataUrl);
-              } else {
-                delete _coverCache[fileId];
-                _loadID3Cover(fileId,accountKey);
-              }
-            });
+            // Primera vez — intentar descargar carátula
+            _loadID3Cover(fileId,accountKey);
           } else if(_coverCache[fileId]==='none'){
-            // Sin carátula confirmado
-          } else if(_coverCache[fileId]!=='pending'){
+            // Sin carátula confirmado — no re-descargar (evita tráfico excesivo con miles de canciones)
+            // Solo reintentar si el song ya no tiene cover marcado (puede cambiar entre sesiones)
+            const s=songs.find(x=>x.fileId===fileId);
+            if(s&&s.coverUrl){
+              // La BD tiene cover aunque el cache diga 'none' — actualizar cache y aplicar
+              _coverCache[fileId]=s.coverUrl;
+              _applycover(fileId,s.coverUrl);
+            }
+            // Si no hay cover en BD tampoco, no reintentamos esta sesión
+          } else {
             // Tenemos carátula en cache — aplicarla directamente
             _applycover(fileId,_coverCache[fileId]);
           }
@@ -4817,7 +4879,7 @@ async function startCoverSync(){
           found++;
           song.coverUrl = dataUrl;
           _coverCache[song.fileId] = dataUrl;
-          _saveCoverLocal(song.fileId, dataUrl);
+          await _supabase.from('songs').update({cover_url: dataUrl}).eq('id', song.id);
           _applycover(song.fileId, dataUrl);
         } else {
           failed++;
