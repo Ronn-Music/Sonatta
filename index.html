@@ -4059,7 +4059,7 @@ function connectGDrivePopup(){
     +'&access_type=offline'
     +'&scope='+encodeURIComponent(scope)
     +'&state='+encodeURIComponent(JSON.stringify({nonce,provider:'gdrive'}))
-    +'&prompt='+encodeURIComponent('select_account consent');
+    +'&prompt=consent';
   // Redirección directa — más confiable que popup (evita problemas COOP de Google)
   window.location.href = url;
 }
