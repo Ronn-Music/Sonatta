@@ -2400,13 +2400,6 @@ async function checkSession(){
       // Only subscribe to state changes if not already logged in
       _supabase.auth.onAuthStateChange((ev,sess)=>{ if(ev==='SIGNED_IN'&&sess?.user) loginSuccess(sess.user); });
     }
-    if(session?.user){
-      loginSuccess(session.user);
-      if(hasGDriveCallback) setTimeout(()=>detectCloudCallback(),600);
-    } else {
-      // Only subscribe to state changes if not already logged in
-      _supabase.auth.onAuthStateChange((ev,sess)=>{ if(ev==='SIGNED_IN'&&sess?.user) loginSuccess(sess.user); });
-    }
   }
 }
 
