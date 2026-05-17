@@ -3811,9 +3811,9 @@ async function silentRefreshGDrive(accountKey){
   _silentRefreshInProgress[accountKey]=true;
   try{
     const{data:cd}=await _supabase.from('cloud_connections')
-      .select('access_token').eq('user_id',currentUser.id).eq('provider','gdrive').limit(1);
+      .select('access_token,refresh_token').eq('user_id',currentUser.id).eq('provider','gdrive').limit(1);
     const row=cd&&cd[0]; if(!row){delete _silentRefreshInProgress[accountKey];return null;}
-    let refreshToken=null;
+    let refreshToken=row.refresh_token||null; // Check direct column first (most reliable)
     let resolvedAccountKey=accountKey;
     try{
       const p=JSON.parse(row.access_token);
@@ -3824,11 +3824,14 @@ async function silentRefreshGDrive(accountKey){
           // Clave genérica o sin refresh_token — buscar cualquier cuenta que tenga refresh_token
           acc=p.accounts.find(a=>a.refresh_token);
         }
-        if(acc){ refreshToken=acc.refresh_token; resolvedAccountKey=acc.key||accountKey; }
+        if(acc){ 
+          if(!refreshToken) refreshToken=acc.refresh_token;
+          resolvedAccountKey=acc.key||accountKey; 
+        }
       } else if(p.refresh_token){
-        refreshToken=p.refresh_token;
+        if(!refreshToken) refreshToken=p.refresh_token;
       }
-    }catch(e){ refreshToken=null; }
+    }catch(e){}
 
     // ESTRATEGIA 1: refresh_token en servidor (permanente, no requiere interaccion)
     if(refreshToken){
@@ -4190,7 +4193,8 @@ async function saveGDriveToken(accessToken, expiresIn, refreshToken=null){
   const tokenJson=JSON.stringify({_multiAccount:true,accounts});
   const upsertData={user_id:currentUser.id,provider:'gdrive',account_key:accountKey,
     account_label:accountEmail,access_token:tokenJson,
-    token_expires_at:exp,connected_at:new Date().toISOString()};
+    token_expires_at:exp,connected_at:new Date().toISOString(),
+    ...(finalRefreshToken?{refresh_token:finalRefreshToken}:{})};
 
   let saveError;
   if(row){
