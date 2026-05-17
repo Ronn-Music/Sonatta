@@ -2382,24 +2382,23 @@ async function checkSession(){
       return;
     }
   }
-// Use getSession first, then onAuthStateChange only for future changes - avoids lock contention
-    const{data:{session},error:sessErr}=await _supabase.auth.getSession();
-    // Detectar callback OAuth de Google: puede venir como ?code= (query) o #access_token= (hash)
-    const hasGDriveCallback = hasHash || window.location.search.includes('code=');
-    if(sessErr){
-      // Refresh token inválido — limpiar y mostrar login
-      await _supabase.auth.signOut().catch(()=>{});
-      localStorage.removeItem('sb-kujxljnsmhjmcmhpctai-auth-token');
-      showScreen('welcomeScreen');
-      return;
-    }
-    if(session?.user){
-      loginSuccess(session.user);
-      if(hasGDriveCallback) setTimeout(()=>detectCloudCallback(),600);
-    } else {
-      // Only subscribe to state changes if not already logged in
-      _supabase.auth.onAuthStateChange((ev,sess)=>{ if(ev==='SIGNED_IN'&&sess?.user) loginSuccess(sess.user); });
-    }
+  // Use getSession first, then onAuthStateChange only for future changes - avoids lock contention
+  const{data:{session},error:sessErr}=await _supabase.auth.getSession();
+  // Detectar callback OAuth de Google: puede venir como ?code= (query) o #access_token= (hash)
+  const hasGDriveCallback = hasHash || window.location.search.includes('code=');
+  if(sessErr){
+    // Refresh token inválido — limpiar y mostrar login
+    await _supabase.auth.signOut().catch(()=>{});
+    localStorage.removeItem('sb-kujxljnsmhjmcmhpctai-auth-token');
+    showScreen('welcomeScreen');
+    return;
+  }
+  if(session?.user){
+    loginSuccess(session.user);
+    if(hasGDriveCallback) setTimeout(()=>detectCloudCallback(),600);
+  } else {
+    // Only subscribe to state changes if not already logged in
+    _supabase.auth.onAuthStateChange((ev,sess)=>{ if(ev==='SIGNED_IN'&&sess?.user) loginSuccess(sess.user); });
   }
 }
 
